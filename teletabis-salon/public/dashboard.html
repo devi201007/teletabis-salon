@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="id"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#fbf8f4"><title>Dashboard — Teletabis Salon</title><link rel="icon" href="/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/style.css"></head>
+<body data-page="dashboard"><header class="site-header"><a class="brand" href="/" aria-label="Teletabis Salon — Dashboard"><img src="/logo.png" alt=""><span>Teletabis <small>BEAUTY STUDIO</small></span></a><nav id="nav" aria-label="Navigasi utama"></nav></header>
+<main id="app"><aside class="dashboard-watermark" id="dashboard-watermark" hidden><span>LOGIN SEBAGAI</span><b id="watermark-identity"></b><span>IP: <b id="watermark-ip"></b></span></aside>
+<p class="warn" id="password-warning" hidden>Password Anda sudah lebih dari 90 hari. Mohon segera diganti.</p>
+<form class="card" id="f-book" data-role="customer" hidden><h2>Booking Treatment</h2><select name="service_id" id="booking-service" required></select><input type="date" name="date" id="booking-date" required><input type="time" name="time" min="09:00" max="20:59" required><button>Pesan</button></form>
+<section class="card"><h2 id="booking-title">Booking Saya</h2><div id="bk"></div></section>
+<section class="card panic-card" data-role="admin" hidden><div><span class="eyebrow">DARURAT KEAMANAN</span><h2>Kunci semua sesi</h2><p>Logout semua perangkat yang sedang masuk, termasuk sesi ini. Semua pengguna perlu login ulang.</p></div><button class="panic-button" data-act="panic">Kunci Semua Sesi</button></section>
+<section class="card" data-role="admin" hidden><h2>Monitoring Keamanan</h2><div class="grid" id="st"></div></section>
+<section class="card" data-role="admin" hidden><h2>Data Pengguna (HP terenkripsi)</h2><div id="us"></div></section>
+<section class="card" data-role="admin" hidden><h2>Audit Trail</h2><button data-act="verify">Verifikasi Integritas Log</button><div id="au"></div></section>
+<section class="card" data-role="admin" hidden><div><h2>Kelola Layanan</h2><p>Tambah layanan, atur harga normal dan promo, atau unggah foto. Layanan dihapus dari katalog dengan konfirmasi password admin; riwayat booking tetap tersimpan.</p></div>
+<form id="f-service" class="service-editor" enctype="multipart/form-data">
+<input type="hidden" name="id">
+<h3 id="service-form-title">Tambah layanan</h3>
+<div class="service-editor-grid">
+<label>Nama layanan<input name="name" maxlength="120" required></label>
+<label class="service-image-field">Penjelasan layanan<textarea name="description" rows="3" maxlength="1500" required></textarea></label>
+<label>Harga normal (Rp)<input name="price" type="number" min="1" step="1" required></label>
+<label>Harga diskon (Rp)<input name="discount_price" type="number" min="1" step="1" placeholder="Kosongkan jika tidak promo"></label>
+<label>Durasi (menit)<input name="minutes" type="number" min="1" max="1440" step="1" required></label>
+<label class="service-image-field">Pilih foto dari perangkat (JPG, PNG, WebP; maks. 5 MB)<input name="image" type="file" accept="image/jpeg,image/png,image/webp"></label>
+</div>
+<div class="service-image-preview" id="service-image-preview" hidden><img id="service-image-preview-img" alt="Pratinjau foto layanan"><span id="service-image-preview-name"></span></div>
+<label class="service-checkbox"><input type="checkbox" name="remove_image" value="1"> Hapus foto layanan yang saat ini tersimpan</label>
+<div class="dialog-actions"><button id="service-submit">Tambah layanan</button><button class="secondary-button" type="button" data-act="cancel-service-edit" hidden>Batal edit</button></div>
+</form>
+<div id="admin-services"></div></section>
+<section class="card" data-role="admin" hidden><h2>Backup Database</h2><button data-act="backup">Buat Backup + Checksum SHA-256</button><ul id="bkp"></ul></section>
+<form class="card" id="f-pw"><h2>Ganti Password</h2><input type="password" name="oldPassword" placeholder="Password lama" required><input type="password" name="newPassword" placeholder="Password baru" required><button>Simpan</button></form></main>
+<dialog class="confirm-dialog" id="delete-service-dialog"><form id="f-delete-service" method="dialog"><span class="eyebrow">KONFIRMASI ADMIN</span><h2>Hapus layanan?</h2><p id="delete-service-name"></p><input type="hidden" name="serviceId"><label class="field-label" for="delete-admin-password">Masukkan password admin</label><input id="delete-admin-password" type="password" name="password" autocomplete="current-password" required><div class="dialog-actions"><button type="button" class="secondary-button" data-act="close-delete">Batal</button><button class="danger-button">Hapus layanan</button></div></form></dialog>
+<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js"></script></body></html>
