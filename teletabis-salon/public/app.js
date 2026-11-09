@@ -2,7 +2,11 @@ const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>
 const localToday=()=>{const now=new Date();now.setMinutes(now.getMinutes()-now.getTimezoneOffset());return now.toISOString().slice(0,10)};
 async function api(p,m='GET',b){
   const isForm=b instanceof FormData;
-  const r=await fetch('/api'+p,{method:m,headers:b&&!isForm?{'Content-Type':'application/json'}:undefined,body:b?(isForm?b:JSON.stringify(b)):undefined}),d=await r.json().catch(()=>({}));
+  const headers={};
+  if(b&&!isForm)headers['Content-Type']='application/json';
+  const token=sessionStorage.getItem('teletabisSessionToken');
+  if(token)headers.Authorization=`Bearer ${token}`;
+  const r=await fetch('/api'+p,{method:m,credentials:'omit',headers:Object.keys(headers).length?headers:undefined,body:b?(isForm?b:JSON.stringify(b)):undefined}),d=await r.json().catch(()=>({}));
   if(!r.ok){const e=new Error(d.error||'Terjadi kesalahan');e.status=r.status;throw e}
   return d
 }
@@ -10,9 +14,27 @@ const toast=(m,ok=true)=>{const t=$('#toast');t.textContent=m;t.className=ok?'ok
 const tbl=(h,r)=>`<div class="tw"><table><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${r.map(x=>`<tr>${x.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')||'<tr><td colspan="'+h.length+'">Belum ada data</td></tr>'}</table></div>`;
 let me=null,services=[],adminServices=[],currentIp='';
 
+function setupPasswordVisibility(){
+  document.querySelectorAll('input[type="password"]').forEach(input=>{
+    const wrapper=document.createElement('div');
+    wrapper.className='password-field';
+    input.parentNode.insertBefore(wrapper,input);
+    wrapper.append(input);
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='password-toggle';
+    button.dataset.act='toggle-password';
+    button.setAttribute('aria-label','Lihat password');
+    button.setAttribute('aria-pressed','false');
+    button.textContent='Lihat';
+    wrapper.append(button)
+  })
+}
+
 async function init(){
   const page=document.body.dataset.page;
-  try{const session=await api('/me');me=session.user;currentIp=session.ip}catch(e){if(e.status!==401)throw e}
+  setupPasswordVisibility();
+  try{const session=await api('/me');me=session.user;currentIp=session.ip}catch(e){if(e.status===401)sessionStorage.removeItem('teletabisSessionToken');else throw e}
   const staff=me&&me.role!=='customer';
   if(me&&(page==='login'||staff&&page!=='dashboard')){location.replace('/dashboard');return}
   if(page==='dashboard'&&!me){location.replace('/login');return}
@@ -25,7 +47,7 @@ async function init(){
   setupServiceImages();
   if(me)window.setInterval(async()=>{
     if(document.visibilityState!=='visible')return;
-    try{await api('/me')}catch(e){if(e.status===401)location.replace('/login')}
+    try{await api('/me')}catch(e){if(e.status===401){sessionStorage.removeItem('teletabisSessionToken');location.replace('/login')}}
   },5000);
 }
 
@@ -33,7 +55,7 @@ function renderNav(page){
   const staff=me&&me.role!=='customer';
   $('.brand').href=staff?'/dashboard':'/';
   const links=staff?'':`<a href="/"${page==='home'?' aria-current="page"':''}>Beranda</a><a href="/layanan"${page==='services'?' aria-current="page"':''}>Layanan</a><a href="/tentang-kami"${page==='about'?' aria-current="page"':''}>Tentang kami</a>`;
-  const account=me?`${!staff?'<a href="/dashboard">Dashboard</a>':''}<span class="nav-user">${esc(me.name)} · <b>${esc(me.role)}</b></span><button class="nav-cta" data-act="out">Keluar</button>`:`<a class="nav-cta" href="/login"${page==='login'?' aria-current="page"':''}>Masuk</a>`;
+  const account=me?`${!staff?'<a href="/dashboard">Dashboard</a>':''}<a href="/login" target="_blank" rel="noopener">Masuk di tab baru</a><span class="nav-user">${esc(me.name)} · <b>${esc(me.role)}</b></span><button class="nav-cta" data-act="out">Keluar</button>`:`<a class="nav-cta" href="/login"${page==='login'?' aria-current="page"':''}>Masuk</a>`;
   $('#nav').innerHTML=links+account;
 }
 
@@ -122,7 +144,12 @@ document.addEventListener('submit',async e=>{
   if(!['f-login','f-reg','f-book','f-pw','f-delete-service','f-service'].includes(id))return;
   e.preventDefault();
   try{
-    if(id==='f-login'){await api('/login','POST',d);location.assign('/dashboard')}
+    if(id==='f-login'){
+      const session=await api('/login','POST',d);
+      if(/^[a-f0-9]{64}$/.test(session.token||''))sessionStorage.setItem('teletabisSessionToken',session.token);
+      else throw new Error('Server masih memakai versi login lama. Restart server dengan Ctrl+C, lalu jalankan npm start lagi.');
+      location.assign('/dashboard')
+    }
     else if(id==='f-reg'){await api('/register','POST',d);toast('Pendaftaran berhasil, silakan masuk');f.reset()}
     else if(id==='f-book'){d.service_id=+d.service_id;await api('/bookings','POST',d);toast('Booking berhasil dibuat');f.reset();load()}
     else if(id==='f-pw'){await api('/password','POST',d);toast('Password berhasil diganti');f.reset();me.mustChange=false;$('#password-warning').hidden=true}
@@ -147,7 +174,16 @@ document.addEventListener('click',async e=>{
   if(!a)return;
   try{
     if(a==='captcha'){await refreshCaptcha($('#f-login'));return}
-    if(a==='out'){await api('/logout','POST');location.assign('/');return}
+    if(a==='toggle-password'){
+      const input=button.parentElement.querySelector('input');
+      const visible=input.type==='password';
+      input.type=visible?'text':'password';
+      button.textContent=visible?'Sembunyikan':'Lihat';
+      button.setAttribute('aria-label',visible?'Sembunyikan password':'Lihat password');
+      button.setAttribute('aria-pressed',String(visible));
+      return
+    }
+    if(a==='out'){await api('/logout','POST');sessionStorage.removeItem('teletabisSessionToken');location.assign('/');return}
     if(a==='verify'){const r=await api('/admin/verify');toast(r.ok?'Log audit utuh: tidak ada manipulasi ✔':'Log dimanipulasi! Entri #'+r.badId,r.ok)}
     if(a==='backup'){await api('/admin/backup','POST');toast('Backup dibuat');adm()}
     if(a==='delete-service'){

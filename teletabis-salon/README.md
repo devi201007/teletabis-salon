@@ -33,7 +33,7 @@ Konten halaman bisa diedit di `public/index.html`, `public/layanan.html`, `publi
 
 ## Fitur keamanan
 
-- Peran customer/kasir/admin, sesi cookie `httpOnly`, CAPTCHA sekali pakai, dan penguncian akun setelah lima kegagalan login. Pembatasan login admin/kasir pukul 09.00–21.00 WIB dapat diaktifkan melalui `LOGIN_HOURS_ENABLED=1`.
+- Peran customer/kasir/admin, token sesi per tab yang disimpan di `sessionStorage` (server hanya menyimpan hash token), CAPTCHA sekali pakai, dan penguncian akun setelah lima kegagalan login. Setiap tab dapat memakai akun/role berbeda tanpa logout dari tab lain. Pembatasan login admin/kasir pukul 09.00–21.00 WIB dapat diaktifkan melalui `LOGIN_HOURS_ENABLED=1`.
 - Nomor HP dienkripsi AES-256-GCM; password di-hash bcrypt.
 - Panic button admin mencabut semua sesi aktif.
 - Watermark dashboard menampilkan identitas akun dan IP.
@@ -45,7 +45,7 @@ Konten halaman bisa diedit di `public/index.html`, `public/layanan.html`, `publi
 | Materi | Implementasi |
 |---|---|
 | Siklus hidup basis data | Skema MySQL/InnoDB di `database.sql`; backup dan checksum tersedia dari dashboard |
-| RBAC dan autentikasi | Peran customer/kasir/admin, CAPTCHA, sesi cookie, lockout, dan pembatasan jam login staf |
+| RBAC dan autentikasi | Peran customer/kasir/admin, CAPTCHA, token sesi per tab, lockout, dan pembatasan jam login staf |
 | Enkripsi dan integritas | AES-256-GCM untuk nomor HP, bcrypt untuk password, hash berantai SHA-256 untuk audit |
 | Validasi dan keamanan web | Prepared statements, validasi input, Helmet, rate limit, dan validasi file upload |
 | Relasi dan histori | Foreign key, indeks, serta snapshot harga pada setiap booking |

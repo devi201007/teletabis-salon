@@ -168,7 +168,7 @@ const jakartaDate=()=>{
   return`${values.year}-${values.month}-${values.day}`
 };
 const auth=asyncRoute(async(req,res,next)=>{
-  const match=/(?:^|; )sid=([a-f0-9]{64})/.exec(req.headers.cookie||'');
+  const match=/^Bearer ([a-f0-9]{64})$/.exec(req.get('authorization')||'');
   if(!match)return res.status(401).json({error:'Belum login'});
   const session=await row(
     'SELECT u.*,s.expires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?',
@@ -351,15 +351,14 @@ app.post('/api/login',limiter,asyncRoute(async(req,res)=>{
   await execute('UPDATE users SET failed=0,locked_until=0 WHERE id=?',[user.id]);
   const token=crypto.randomBytes(32).toString('hex');
   await execute('INSERT INTO sessions(token_hash,user_id,expires) VALUES(?,?,?)',[sha(token),user.id,Date.now()+2*3600e3]);
-  res.cookie('sid',token,{httpOnly:true,sameSite:'strict',secure:process.env.HTTPS==='1',maxAge:2*3600e3});
   await audit(user.id,'LOGIN_BERHASIL','',req.ip);
-  res.json({user:publicUser(user)})
+  res.set('Cache-Control','no-store').json({user:publicUser(user),token})
 }));
 
 app.post('/api/logout',auth,asyncRoute(async(req,res)=>{
   await execute('DELETE FROM sessions WHERE token_hash=?',[sha(req.token)]);
   await audit(req.user.id,'LOGOUT','',req.ip);
-  res.clearCookie('sid').json({ok:true})
+  res.json({ok:true})
 }));
 app.get('/api/me',auth,(req,res)=>res.json({user:publicUser(req.user),ip:req.ip}));
 app.get('/api/services',asyncRoute(async(_req,res)=>{
@@ -440,7 +439,7 @@ app.post('/api/admin/lock-sessions',auth,admin,asyncRoute(async(req,res)=>{
     return result.affectedRows
   });
   await audit(req.user.id,'SEMUA_SESI_DIKUNCI',String(removed)+' sesi',req.ip);
-  res.clearCookie('sid').json({ok:true,revoked:removed})
+  res.json({ok:true,revoked:removed})
 }));
 app.get('/api/admin/services',auth,admin,asyncRoute(async(_req,res)=>{
   res.json(await rows('SELECT id,name,description,price,discount_price,minutes,image_path FROM services WHERE active=1 ORDER BY sort_order,id'))
