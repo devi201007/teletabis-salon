@@ -7,7 +7,16 @@
 <main id="app"><aside class="dashboard-watermark" id="dashboard-watermark" hidden><span>LOGIN SEBAGAI</span><b id="watermark-identity"></b><span>IP: <b id="watermark-ip"></b></span></aside>
 <p class="warn" id="password-warning" hidden>Password Anda sudah lebih dari 90 hari. Mohon segera diganti.</p>
 <form class="card" id="f-book" data-role="customer" hidden><h2>Booking Treatment</h2><select name="service_id" id="booking-service" required></select><input type="date" name="date" id="booking-date" required><input type="time" name="time" min="09:00" max="20:59" required><button>Pesan</button></form>
-<section class="card" id="booking-panel"><h2 id="booking-title">Booking Saya</h2><div id="bk"></div></section>
+<section class="card" id="booking-panel"><h2 id="booking-title">Booking Saya</h2><p id="booking-error" class="booking-error" role="alert" hidden></p><div id="bk"></div></section>
+<section class="card" id="cashier-inventory-panel" data-role="kasir" hidden>
+<h2>Stok Barang</h2>
+<p>Informasi stok untuk kasir. Perubahan data dan stok hanya dapat dilakukan admin.</p>
+<div class="inventory-filters">
+<label>Cari nama barang<input id="cashier-inventory-search" type="search" placeholder="Ketik nama barang"></label>
+<label>Filter kategori<select id="cashier-inventory-category"><option value="">Semua kategori</option><option>Rambut</option><option>Kuku</option><option>Mata &amp; Alis</option><option>Wajah &amp; Badan</option><option>Makeup</option></select></label>
+</div>
+<div id="cashier-inventory-list"></div>
+</section>
 <section id="admin-categories" data-role="admin" hidden>
 <div class="page-hero"><span class="eyebrow">PANEL ADMIN</span><h1>Kelola Salon</h1><p>Pilih kategori untuk mengelola stok, keamanan, dan layanan.</p></div>
 <div class="admin-category-grid">
@@ -48,4 +57,5 @@
 </section>
 <form class="card" id="f-pw"><h2>Ganti Password</h2><input type="password" name="oldPassword" placeholder="Password lama" required><input type="password" name="newPassword" placeholder="Password baru" required><button>Simpan</button></form></main>
 <dialog class="confirm-dialog" id="delete-service-dialog"><form id="f-delete-service" method="dialog"><span class="eyebrow">KONFIRMASI ADMIN</span><h2>Hapus layanan?</h2><p id="delete-service-name"></p><input type="hidden" name="serviceId"><label class="field-label" for="delete-admin-password">Masukkan password admin</label><input id="delete-admin-password" type="password" name="password" autocomplete="current-password" required><div class="dialog-actions"><button type="button" class="secondary-button" data-act="close-delete">Batal</button><button class="danger-button">Hapus layanan</button></div></form></dialog>
-<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js?v=admin-categories-1"></script></body></html>
+<dialog class="confirm-dialog materials-dialog" id="service-materials-dialog"><form id="f-service-materials" method="dialog"><span class="eyebrow">KELOLA LAYANAN</span><h2>Barang dan jumlah pakai</h2><p id="service-materials-name"></p><input type="hidden" name="serviceId"><div id="service-material-choices" class="service-material-choices"></div><div class="dialog-actions"><button type="button" class="secondary-button" data-act="close-materials">Batal</button><button>Simpan Barang Layanan</button></div></form></dialog>
+<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js?v=cashier-inventory-1"></script></body></html>

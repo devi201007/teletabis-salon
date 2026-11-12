@@ -5,8 +5,12 @@
 1. Jalankan service **MySQL** dari Laragon.
 2. Buka phpMyAdmin, pilih **Import**, lalu impor file `database.sql`. File ini membuat database `teletabis_salon`, tabel aplikasi, dua akun demo, dan 30 layanan awal.
 3. Salin `.env.example` menjadi `.env`, lalu sesuaikan host, port, username, dan password MySQL dengan konfigurasi Laragon.
-4. Dari folder proyek, jalankan `npm install`, lalu `npm start`.
-5. Buka http://localhost:3000.
+4. Dari folder proyek, jalankan `npm install`.
+5. Terapkan skema stok secara aman dan aditif dengan `npm run db:migrate`.
+6. Isi data barang dan relasi pemakaian layanan dengan `npm run db:seed`.
+7. Jalankan `npm start`.
+8. Buka http://localhost:3000.
+cd C:\laragon\www\github\teletabis-salon\teletabis-salon
 
 Jika mengubah `DB_NAME` di `.env`, samakan nama database dengan yang dibuat di phpMyAdmin. Jangan unggah atau bagikan `.env` maupun `.datakey`. `.datakey` dibuat otomatis saat server pertama kali dijalankan; simpan cadangannya dengan aman karena diperlukan untuk membaca nomor HP yang terenkripsi.
 
@@ -35,7 +39,11 @@ Konten halaman bisa diedit di `public/index.html`, `public/layanan.html`, `publi
 
 Dashboard admin menampilkan tiga kategori: **Stok Barang** membuka `/admin/inventory`, **Keamanan** memuat backup database, ganti password, audit trail, data pengguna, monitoring keamanan, dan kunci semua sesi, sedangkan **Kelola Layanan** berisi CRUD layanan. Daftar booking disembunyikan dari halaman admin; booking customer dan kasir tetap tersedia.
 
-Saat server mulai, tabel inventory dibuat jika belum ada dan stok awal B01–B49 dimasukkan hanya untuk barang yang belum ada. Admin dapat menambah atau mengedit barang, mencatat barang masuk/keluar, mengoreksi stok aktual, menghapus barang dari daftar, dan melihat badge stok rendah serta riwayat mutasi. Perubahan stok dicatat bersama user dan saldo sebelum/sesudah; backup database turut mencakup tabel inventory.
+Jalankan `npm run db:migrate` setelah mengimpor database dan sebelum server pertama kali dijalankan; migrasi menambahkan tabel `inventory`, `service_materials`, `inventory_logs`, snapshot pemakaian booking, serta kolom `bookings.stok_dipotong` tanpa menghapus tabel stok lama. Setelah itu jalankan `npm run db:seed`. Seeder aman dijalankan ulang, membuat barang dengan stok 0, menetapkan ambang stok minimum, dan menghubungkan nama layanan yang cocok tanpa mengganti jumlah pemakaian yang sudah diubah admin. Layanan yang tidak cocok dicatat di log proses seed.
+
+Admin dapat memfilter barang berdasarkan kategori atau nama, menambah/mengubah/menghapus barang, mengisi stok awal banyak barang, menambah stok, mengoreksi stok, dan melihat riwayat per barang. Barang yang masih digunakan oleh layanan tidak dapat dihapus. Mutasi stok dan pemakaian booking dicatat dengan saldo sebelum/sesudah, kasir/admin pencatat, serta nomor booking jika terkait. Di **Kelola Layanan**, admin dapat mengatur checklist barang dan jumlah pemakaian per booking.
+
+Saat kasir mengubah booking ke **dikonfirmasi** atau langsung ke **selesai**, stok barang habis pakai dikurangi atomik; alat tidak dipotong. Stok yang tidak cukup membatalkan seluruh perubahan status dan menampilkan nama barang serta jumlah yang kurang. Status yang berubah bolak-balik tidak memotong stok dua kali, sedangkan pembatalan booking yang sudah memotong stok mengembalikan pemakaian yang tersimpan pada snapshot. Booking selesai tampil pada bagian **Booking Selesai** yang tertutup secara default.
 
 ## Fitur keamanan
 

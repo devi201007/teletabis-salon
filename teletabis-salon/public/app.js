@@ -108,15 +108,27 @@ function initDashboard(){
   if(me.role==='admin'){
     $('#f-pw').hidden=true;
     initAdminCategories()
-  }else load().catch(e=>toast(e.message,false))
+  }else{
+    load().catch(e=>toast(e.message,false));
+    if(me.role==='kasir')loadCashierInventory().catch(e=>toast(e.message,false))
+  }
 }
 
 async function load(){
   const staff=me.role!=='customer',b=await api('/bookings');
-  $('#bk').innerHTML=tbl(['Tanggal','Jam','Layanan','Nominal','Pelanggan','Status'],b.map(x=>[
+  const toRows=bookings=>bookings.map(x=>[
     esc(x.date),esc(x.time),esc(x.service),rp(x.price),esc(x.customer),
-    staff?`<select data-sel data-id="${x.id}">${['menunggu','dikonfirmasi','selesai','batal'].map(o=>`<option${o===x.status?' selected':''}>${o}</option>`).join('')}</select>`:esc(x.status)
-  ]))
+    staff?`<select data-sel data-id="${x.id}" data-current="${esc(x.status)}"${x.status==='selesai'?' disabled':''}>${['menunggu','dikonfirmasi','selesai','batal'].map(o=>`<option${o===x.status?' selected':''}>${o}</option>`).join('')}</select>`:esc(x.status)
+  ]);
+  if(!staff){
+    $('#bk').innerHTML=tbl(['Tanggal','Jam','Layanan','Nominal','Pelanggan','Status'],toRows(b));
+    return
+  }
+  const pending=b.filter(item=>item.status!=='selesai').sort((a,c)=>(a.date+' '+a.time).localeCompare(c.date+' '+c.time));
+  const completed=b.filter(item=>item.status==='selesai').sort((a,c)=>(c.date+' '+c.time).localeCompare(a.date+' '+a.time));
+  $('#booking-error').hidden=true;
+  $('#bk').innerHTML=tbl(['Tanggal','Jam','Layanan','Nominal','Pelanggan','Status'],toRows(pending))+
+    `<details class="completed-bookings"><summary>Booking Selesai (${completed.length})</summary>${tbl(['Tanggal','Jam','Layanan','Nominal','Pelanggan','Status'],toRows(completed))}</details>`
 }
 
 async function loadAdminSecurity(){
@@ -127,11 +139,12 @@ async function loadAdminSecurity(){
   $('#bkp').innerHTML=bk.map(f=>`<li>${esc(f.file)}<br><code>SHA-256: ${esc(f.sha256)}</code></li>`).join('')||'<li>Belum ada backup</li>';
 }
 async function loadAdminServices(){
-  const serviceList=await api('/admin/services');
+  const[inventory,serviceList]=await Promise.all([api('/admin/inventory'),api('/admin/services')]);
+  inventoryItems=inventory;
   adminServices=serviceList;
   $('#admin-services').innerHTML=tbl(['Foto','Layanan','Harga','Aksi'],serviceList.map(s=>[
     `<div class="service-admin-photo"><span class="service-no-image">${s.image_path?'Foto tidak ditemukan':'Belum ada foto'}</span>${s.image_path?`<img class="service-admin-thumb" src="${esc(s.image_path)}" alt="Foto ${esc(s.name)}" loading="lazy">`:''}</div>`,
-    `${esc(s.name)}<br><small>${esc(s.description||'')}</small>`,servicePrice(s),`<div class="service-actions"><button class="secondary-button" type="button" data-act="service-image-picker" data-id="${s.id}">Ganti foto</button><input class="service-row-upload" type="file" accept="image/jpeg,image/png,image/webp" data-service-upload="${s.id}" aria-label="Pilih foto ${esc(s.name)}"><button class="secondary-button" type="button" data-act="edit-service" data-id="${s.id}">Edit</button><button class="danger-button" type="button" data-act="delete-service" data-id="${s.id}" data-name="${esc(s.name)}">Hapus</button></div>`
+    `${esc(s.name)}<br><small>${esc(s.description||'')}</small>`,servicePrice(s),`<div class="service-actions"><button class="secondary-button" type="button" data-act="edit-service-materials" data-id="${s.id}">Atur barang (${s.materials.length})</button><button class="secondary-button" type="button" data-act="service-image-picker" data-id="${s.id}">Ganti foto</button><input class="service-row-upload" type="file" accept="image/jpeg,image/png,image/webp" data-service-upload="${s.id}" aria-label="Pilih foto ${esc(s.name)}"><button class="secondary-button" type="button" data-act="edit-service" data-id="${s.id}">Edit</button><button class="danger-button" type="button" data-act="delete-service" data-id="${s.id}" data-name="${esc(s.name)}">Hapus</button></div>`
   ]));
   setupServiceImages()
 }
@@ -152,19 +165,61 @@ function initAdminCategories(){
 }
 const stockNumber=value=>Number(value).toLocaleString('id-ID',{maximumFractionDigits:2});
 async function loadInventory(){
-  const[items,movements]=await Promise.all([api('/admin/inventory'),api('/admin/inventory/movements')]);
-  inventoryItems=items;
-  $('#inventory-list').innerHTML=tbl(['Kode','Barang','Kategori','Stok','Minimum','Status','Aksi'],items.map(item=>[
-    esc(item.code),`${esc(item.name)}<br><small>${esc(item.unit)} · ${rp(item.purchase_price)}/satuan</small>`,esc(item.category),
-    `${stockNumber(item.quantity)} ${esc(item.unit)}`,`${stockNumber(item.low_stock_threshold)} ${esc(item.unit)}`,
-    item.quantity<=item.low_stock_threshold?'<span class="inventory-low">Stok rendah</span>':'<span class="inventory-good">Aman</span>',
-    `<div class="service-actions"><button class="secondary-button" type="button" data-act="edit-inventory" data-id="${item.id}">Edit</button><button class="danger-button" type="button" data-act="delete-inventory" data-id="${item.id}" data-name="${esc(item.name)}">Hapus</button></div>`
+  inventoryItems=await api('/admin/inventory');
+  const options=inventoryItems.map(item=>`<option value="${item.id}">${esc(item.nama_barang)} (${stockNumber(item.stok)} ${esc(item.satuan)})</option>`).join('');
+  $('#stock-item').innerHTML=options;
+  $('#log-item').innerHTML='<option value="">Semua barang</option>'+inventoryItems.map(item=>`<option value="${item.id}">${esc(item.nama_barang)}</option>`).join('');
+  $('#inventory-initial-list').innerHTML=tbl(['Barang','Stok saat ini','Stok awal yang ditambahkan'],inventoryItems.map(item=>[
+    esc(item.nama_barang),`${stockNumber(item.stok)} ${esc(item.satuan)}`,
+    `<input aria-label="Stok awal ${esc(item.nama_barang)}" data-initial-stock="${item.id}" type="number" min="0" max="99999999.99" step="0.01" value="0">`
   ]));
-  $('#stock-item').innerHTML=items.map(item=>`<option value="${item.id}">${esc(item.code)} · ${esc(item.name)} (${stockNumber(item.quantity)} ${esc(item.unit)})</option>`).join('');
-  $('#inventory-movements').innerHTML=tbl(['Waktu','Barang','Jenis','Perubahan','Stok sebelum → sesudah','Catatan','User'],movements.map(item=>[
-    esc(String(item.created_at).slice(0,19).replace('T',' ')),`${esc(item.code)} · ${esc(item.name)}`,esc(item.type),
-    `${Number(item.change_amount)>0?'+':''}${stockNumber(item.change_amount)}`,
-    `${stockNumber(item.stock_before)} → ${stockNumber(item.stock_after)}`,esc(item.note),esc(item.user||'—')
+  renderInventoryItems();
+  await loadInventoryLogs($('#log-item').value)
+}
+function renderInventoryItems(){
+  const query=$('#inventory-search').value.trim().toLocaleLowerCase('id-ID');
+  const category=$('#inventory-category').value;
+  const filtered=inventoryItems.filter(item=>(!category||item.kategori===category)&&item.nama_barang.toLocaleLowerCase('id-ID').includes(query));
+  $('#inventory-list').innerHTML=tbl(['Nama','Kategori','Jenis','Satuan','Stok','Stok minimum','Aksi'],filtered.map(item=>{
+    const badges=(item.stok===0?'<span class="inventory-empty">Habis</span>':'')+
+      (item.stok<=item.stok_minimum?'<span class="inventory-low">Stok menipis</span>':'');
+    return[
+      esc(item.nama_barang),esc(item.kategori),item.jenis==='alat'?'Alat':'Habis pakai',esc(item.satuan),
+      `${stockNumber(item.stok)} ${esc(item.satuan)}<br>${badges}`,
+      `${stockNumber(item.stok_minimum)} ${esc(item.satuan)}`,
+      `<div class="service-actions"><button class="secondary-button" type="button" data-act="edit-inventory" data-id="${item.id}">Edit</button><button class="secondary-button" type="button" data-act="inventory-logs" data-id="${item.id}">Riwayat</button><button class="danger-button" type="button" data-act="delete-inventory" data-id="${item.id}" data-name="${esc(item.nama_barang)}">Hapus</button></div>`
+    ]
+  }))
+}
+async function loadCashierInventory(){
+  const items=await api('/inventory');
+  inventoryItems=items;
+  renderCashierInventory()
+}
+function renderCashierInventory(){
+  const query=$('#cashier-inventory-search').value.trim().toLocaleLowerCase('id-ID');
+  const category=$('#cashier-inventory-category').value;
+  const filtered=inventoryItems.filter(item=>
+    (!category||item.kategori===category)&&item.nama_barang.toLocaleLowerCase('id-ID').includes(query)
+  );
+  $('#cashier-inventory-list').innerHTML=tbl(['Nama','Kategori','Jenis','Satuan','Stok','Stok minimum','Kondisi'],filtered.map(item=>{
+    const badges=(item.stok===0?'<span class="inventory-empty">Habis</span>':'')+
+      (item.stok>0&&item.stok<=item.stok_minimum?'<span class="inventory-low">Stok menipis</span>':'')+
+      (item.stok>item.stok_minimum?'<span class="inventory-good">Aman</span>':'');
+    return[
+      esc(item.nama_barang),esc(item.kategori),item.jenis==='alat'?'Alat':'Habis pakai',esc(item.satuan),
+      `${stockNumber(item.stok)} ${esc(item.satuan)}`,`${stockNumber(item.stok_minimum)} ${esc(item.satuan)}`,badges
+    ]
+  }))
+}
+async function loadInventoryLogs(inventoryId=''){
+  const query=inventoryId?'?inventory_id='+encodeURIComponent(inventoryId):'';
+  const logs=await api('/admin/inventory/logs'+query);
+  $('#inventory-logs').innerHTML=tbl(['Waktu','Barang','Jenis','Jumlah','Stok sebelum → sesudah','Keterangan','Booking','Dicatat oleh'],logs.map(item=>[
+    esc(String(item.created_at).slice(0,19).replace('T',' ')),esc(item.nama_barang),esc(item.tipe),
+    `${Number(item.jumlah)>0?'+':''}${stockNumber(item.jumlah)}`,
+    `${stockNumber(item.stok_sebelum)} → ${stockNumber(item.stok_sesudah)}`,esc(item.keterangan),
+    item.booking_id?'#'+esc(item.booking_id):'—',esc(item.pembuat||'—')
   ]))
 }
 function initInventory(){
@@ -186,15 +241,13 @@ const resetInventoryForm=()=>{
   const form=$('#f-inventory');
   form.reset();
   form.elements.id.value='';
-  $('#inventory-initial-stock').hidden=false;
-  form.elements.quantity.required=true;
   $('#inventory-form-title').textContent='Tambah Barang';
   $('#inventory-submit').textContent='Tambah Barang';
   form.querySelector('[data-act="cancel-inventory-edit"]').hidden=true
 };
 document.addEventListener('submit',async e=>{
   const f=e.target,id=f.id,d=fd(f);
-  if(!['f-login','f-reg','f-book','f-pw','f-delete-service','f-service','f-inventory','f-stock'].includes(id))return;
+  if(!['f-login','f-reg','f-book','f-pw','f-delete-service','f-service','f-inventory','f-stock','f-initial-stock','f-service-materials'].includes(id))return;
   e.preventDefault();
   try{
     if(id==='f-login'){
@@ -225,12 +278,32 @@ document.addEventListener('submit',async e=>{
     }
     else if(id==='f-stock'){
       const itemId=d.item_id,type=d.type,body={type,note:d.note};
-      if(type==='koreksi')body.stock_actual=d.quantity;
-      else body.quantity=d.quantity;
+      if(type==='koreksi')body.stok_aktual=d.jumlah;
+      else body.jumlah=d.jumlah;
       await api('/admin/inventory/'+encodeURIComponent(itemId)+'/stock','PATCH',body);
       f.reset();
       toast('Mutasi stok berhasil disimpan');
       await loadInventory()
+    }
+    else if(id==='f-initial-stock'){
+      const items=[...f.querySelectorAll('[data-initial-stock]')].map(input=>({
+        inventory_id:input.dataset.initialStock,stok:input.value
+      })).filter(item=>Number(item.stok)>0);
+      if(!items.length)throw new Error('Isi jumlah stok untuk setidaknya satu barang');
+      await api('/admin/inventory/initial-stock','POST',{items});
+      toast('Stok awal berhasil disimpan');
+      await loadInventory()
+    }
+    else if(id==='f-service-materials'){
+      const serviceId=d.serviceId;
+      const materials=[...f.querySelectorAll('[data-material-check]:checked')].map(input=>{
+        const quantity=f.querySelector(`[data-material-quantity="${CSS.escape(input.dataset.materialCheck)}"]`);
+        return{inventory_id:input.dataset.materialCheck,jumlah_pakai:quantity.value}
+      });
+      await api('/admin/services/'+encodeURIComponent(serviceId)+'/materials','PUT',{materials});
+      $('#service-materials-dialog').close();
+      toast('Barang dan jumlah pakai layanan berhasil disimpan');
+      await loadAdminServices()
     }
   }catch(x){
     if(id==='f-login')try{await refreshCaptcha(f)}catch(c){toast(c.message,false)}
@@ -262,19 +335,16 @@ document.addEventListener('click',async e=>{
       const form=$('#f-inventory');
       form.reset();
       form.elements.id.value=item.id;
-      form.elements.code.value=item.code;
-      form.elements.name.value=item.name;
-      form.elements.category.value=item.category;
-      form.elements.unit.value=item.unit;
-      form.elements.low_stock_threshold.value=item.low_stock_threshold;
-      form.elements.purchase_price.value=item.purchase_price;
-      form.elements.quantity.required=false;
-      $('#inventory-initial-stock').hidden=true;
+      form.elements.nama_barang.value=item.nama_barang;
+      form.elements.kategori.value=item.kategori;
+      form.elements.jenis.value=item.jenis;
+      form.elements.satuan.value=item.satuan;
+      form.elements.stok_minimum.value=item.stok_minimum;
       $('#inventory-form-title').textContent='Edit Barang';
       $('#inventory-submit').textContent='Simpan Perubahan';
       form.querySelector('[data-act="cancel-inventory-edit"]').hidden=false;
       form.scrollIntoView({behavior:'smooth',block:'center'});
-      form.elements.name.focus()
+      form.elements.nama_barang.focus()
     }
     if(a==='cancel-inventory-edit')resetInventoryForm();
     if(a==='delete-inventory'){
@@ -282,6 +352,11 @@ document.addEventListener('click',async e=>{
       await api('/admin/inventory/'+encodeURIComponent(button.dataset.id),'DELETE');
       toast('Barang dihapus dari daftar');
       await loadInventory()
+    }
+    if(a==='inventory-logs'){
+      $('#log-item').value=button.dataset.id;
+      await loadInventoryLogs(button.dataset.id);
+      $('#inventory-logs').scrollIntoView({behavior:'smooth',block:'center'})
     }
     if(a==='delete-service'){
       const form=$('#f-delete-service');
@@ -297,6 +372,19 @@ document.addEventListener('click',async e=>{
       input.click()
     }
     if(a==='close-delete')$('#delete-service-dialog').close();
+    if(a==='close-materials')$('#service-materials-dialog').close();
+    if(a==='edit-service-materials'){
+      const service=adminServices.find(item=>String(item.id)===button.dataset.id);
+      if(!service)throw new Error('Data layanan tidak ditemukan; muat ulang halaman');
+      const form=$('#f-service-materials'),used=new Map(service.materials.map(item=>[String(item.inventory_id),item]));
+      form.elements.serviceId.value=service.id;
+      $('#service-materials-name').textContent=service.name;
+      $('#service-material-choices').innerHTML=inventoryItems.map(item=>{
+        const material=used.get(String(item.id));
+        return `<label class="service-material-option"><input type="checkbox" data-material-check="${item.id}"${material?' checked':''}><span>${esc(item.nama_barang)} · ${esc(item.satuan)}${item.jenis==='alat'?' · alat':''}</span><input aria-label="Jumlah pakai ${esc(item.nama_barang)}" data-material-quantity="${item.id}" type="number" min="0.01" max="99999999.99" step="0.01" value="${material?material.jumlah_pakai:1}"${material?'':' disabled'}></label>`
+      }).join('');
+      $('#service-materials-dialog').showModal()
+    }
     if(a==='service-details'){
       const service=services.find(item=>String(item.id)===button.dataset.id);
       if(!service)throw new Error('Detail layanan tidak tersedia; muat ulang halaman');
@@ -351,9 +439,21 @@ document.addEventListener('click',async e=>{
 });
 
 document.addEventListener('change',async e=>{
+  if(e.target.matches('#f-inventory select[name="jenis"]')&&!$('#f-inventory').elements.id.value){
+    $('#f-inventory').elements.stok_minimum.value=e.target.value==='alat'?'1':'5';
+    return
+  }
   if(e.target.matches('#stock-type')){
     $('#stock-quantity-label').textContent=e.target.value==='koreksi'?'Stok aktual':'Jumlah';
-    $('#f-stock').elements.quantity.min=e.target.value==='koreksi'?'0':'0.01';
+    $('#stock-quantity').min=e.target.value==='koreksi'?'0':'0.01';
+    return
+  }
+  if(e.target.matches('#inventory-search,#inventory-category')){renderInventoryItems();return}
+  if(e.target.matches('#cashier-inventory-category')){renderCashierInventory();return}
+  if(e.target.matches('#log-item')){loadInventoryLogs(e.target.value).catch(error=>toast(error.message,false));return}
+  if(e.target.matches('[data-material-check]')){
+    const quantity=$(`#service-materials-dialog [data-material-quantity="${CSS.escape(e.target.dataset.materialCheck)}"]`);
+    quantity.disabled=!e.target.checked;
     return
   }
   if(e.target.matches('[data-service-upload]')){
@@ -386,8 +486,23 @@ document.addEventListener('change',async e=>{
     return
   }
   if(!e.target.matches('[data-sel]'))return;
-  try{await api('/bookings/'+e.target.dataset.id,'PATCH',{status:e.target.value});toast('Status diperbarui')}
-  catch(x){toast(x.message,false)}
+  const select=e.target,bookingError=$('#booking-error');
+  try{
+    await api('/bookings/'+select.dataset.id,'PATCH',{status:select.value});
+    bookingError.hidden=true;
+    toast('Status diperbarui');
+    await load()
+  }catch(x){
+    select.value=select.dataset.current;
+    bookingError.textContent=x.message;
+    bookingError.hidden=false;
+    toast(x.message,false)
+  }
+});
+
+document.addEventListener('input',e=>{
+  if(e.target.matches('#inventory-search'))renderInventoryItems()
+  if(e.target.matches('#cashier-inventory-search'))renderCashierInventory()
 });
 
 init().catch(e=>toast(e.message,false));

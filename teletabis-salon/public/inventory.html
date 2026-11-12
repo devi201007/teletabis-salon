@@ -6,27 +6,30 @@
 <body data-page="inventory"><header class="site-header"><a class="brand" href="/dashboard" aria-label="Teletabis Salon — Dashboard"><img src="/logo.png" alt=""><span>Teletabis <small>BEAUTY STUDIO</small></span></a><nav id="nav" aria-label="Navigasi utama"></nav></header>
 <main id="app">
 <a class="text-link admin-back-link" href="/dashboard">← Kembali ke kategori admin</a>
-<div class="page-hero"><span class="eyebrow">KATEGORI 1 · INVENTORY SALON</span><h1>Stok Barang</h1><p>Kelola barang kebutuhan salon, pantau stok rendah, dan catat setiap perubahan stok.</p></div>
+<div class="page-hero"><span class="eyebrow">KATEGORI 1 · STOK SALON</span><h1>Stok Barang</h1><p>Kelola barang kebutuhan salon, pantau stok rendah, dan catat setiap perubahan stok.</p></div>
 <section class="card"><h2 id="inventory-form-title">Tambah Barang</h2>
 <form id="f-inventory" class="inventory-editor">
 <input type="hidden" name="id">
-<label>Kode barang<input name="code" maxlength="20" placeholder="B50" required></label>
-<label>Nama barang<input name="name" maxlength="160" required></label>
-<label>Kategori<input name="category" maxlength="80" required></label>
-<label>Satuan<input name="unit" maxlength="30" placeholder="ml, gr, pcs" required></label>
-<label>Stok minimum<input name="low_stock_threshold" type="number" min="0" step="0.01" value="0" required></label>
-<label id="inventory-initial-stock">Stok awal<input name="quantity" type="number" min="0" step="0.01" value="0" required></label>
-<label>Harga beli per satuan (Rp)<input name="purchase_price" type="number" min="0" step="1" value="0" required></label>
+<label>Nama barang<input name="nama_barang" maxlength="160" required></label>
+<label>Kategori<select name="kategori" required><option>Rambut</option><option>Kuku</option><option>Mata &amp; Alis</option><option>Wajah &amp; Badan</option><option>Makeup</option></select></label>
+<label>Jenis<select name="jenis" required><option value="habis_pakai">Habis pakai</option><option value="alat">Alat</option></select></label>
+<label>Satuan<input name="satuan" maxlength="30" placeholder="ml, gram, pcs" required></label>
+<label>Stok minimum<input name="stok_minimum" type="number" min="0" max="99999999.99" step="0.01" value="5" required></label>
 <div class="dialog-actions"><button id="inventory-submit">Tambah Barang</button><button class="secondary-button" type="button" data-act="cancel-inventory-edit" hidden>Batal edit</button></div>
 </form></section>
-<section class="card"><h2>Barang Masuk / Keluar / Koreksi</h2>
+<section class="card"><h2>Tambah Stok atau Koreksi Stok</h2>
 <form id="f-stock" class="inventory-editor">
 <label>Barang<select name="item_id" id="stock-item" required></select></label>
-<label>Jenis mutasi<select name="type" id="stock-type"><option value="masuk">Barang masuk</option><option value="keluar">Barang keluar</option><option value="koreksi">Set stok aktual</option></select></label>
-<label><span id="stock-quantity-label">Jumlah</span><input name="quantity" type="number" min="0" step="0.01" required></label>
+<label>Jenis mutasi<select name="type" id="stock-type"><option value="masuk">Tambah stok</option><option value="keluar">Kurangi stok</option><option value="koreksi">Koreksi stok aktual</option></select></label>
+<label><span id="stock-quantity-label">Jumlah</span><input name="jumlah" id="stock-quantity" type="number" min="0.01" max="99999999.99" step="0.01" required></label>
 <label>Catatan<input name="note" maxlength="160" placeholder="Contoh: stok baru dari supplier"></label>
 <div class="dialog-actions"><button>Simpan Mutasi</button></div></form></section>
-<section class="card"><h2>Daftar Barang</h2><div id="inventory-list"></div></section>
-<section class="card"><h2>Riwayat Mutasi Stok</h2><div id="inventory-movements"></div></section>
+<section class="card"><h2>Isi Stok Awal Banyak Barang</h2><p>Jumlah yang dimasukkan akan ditambahkan ke stok saat ini dan dicatat sebagai barang masuk.</p>
+<form id="f-initial-stock"><div id="inventory-initial-list"></div><div class="dialog-actions"><button>Simpan Stok Awal</button></div></form></section>
+<section class="card"><h2>Daftar Barang</h2><div class="inventory-filters">
+<label>Cari nama barang<input id="inventory-search" type="search" placeholder="Ketik nama barang"></label>
+<label>Filter kategori<select id="inventory-category"><option value="">Semua kategori</option><option>Rambut</option><option>Kuku</option><option>Mata &amp; Alis</option><option>Wajah &amp; Badan</option><option>Makeup</option></select></label>
+</div><div id="inventory-list"></div></section>
+<section class="card"><h2>Riwayat Stok</h2><label class="inventory-log-filter">Riwayat barang<select id="log-item"><option value="">Semua barang</option></select></label><div id="inventory-logs"></div></section>
 </main>
-<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js?v=admin-categories-1"></script></body></html>
+<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js?v=inventory-materials-1"></script></body></html>

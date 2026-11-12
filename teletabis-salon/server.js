@@ -141,7 +141,7 @@ const audit=async(userId,action,detail,ip)=>{
   }
 };
 
-const permissions={customer:['booking:create','booking:own'],kasir:['booking:all','booking:update'],admin:['*']};
+const permissions={customer:['booking:create','booking:own'],kasir:['booking:all','booking:update','inventory:view'],admin:['*']};
 const can=(role,permission)=>{
   const allowed=permissions[role]||[];
   return allowed.includes('*')||allowed.includes(permission)
@@ -420,75 +420,151 @@ app.get('/api/bookings',auth,asyncRoute(async(req,res)=>{
   const all=can(req.user.role,'booking:all');
   const sql=`SELECT b.id,DATE_FORMAT(b.booking_date,'%Y-%m-%d') AS date,TIME_FORMAT(b.booking_time,'%H:%i') AS time,b.status,b.price,sv.name AS service,u.name AS customer
     FROM bookings b JOIN services sv ON sv.id=b.service_id JOIN users u ON u.id=b.user_id
-    ${all?'':'WHERE b.user_id=?'} ORDER BY b.booking_date DESC,b.booking_time DESC`;
+    ${all?'':'WHERE b.user_id=?'} ORDER BY b.booking_date,b.booking_time`;
   res.json(await rows(sql,all?[]:[req.user.id]))
+}));
+app.get('/api/inventory',auth,need('inventory:view'),asyncRoute(async(_req,res)=>{
+  const items=await rows(
+    'SELECT id,nama_barang,kategori,jenis,satuan,stok,stok_minimum FROM inventory WHERE deleted_at IS NULL ORDER BY kategori,nama_barang'
+  );
+  res.json(items.map(item=>({...item,stok:Number(item.stok),stok_minimum:Number(item.stok_minimum)})))
 }));
 app.patch('/api/bookings/:id',auth,need('booking:update'),asyncRoute(async(req,res)=>{
   const status=(req.body||{}).status;
   if(!['menunggu','dikonfirmasi','selesai','batal'].includes(status))return res.status(400).json({error:'Status tidak valid'});
-  const result=await execute('UPDATE bookings SET status=? WHERE id=?',[status,req.params.id]);
-  if(!result.affectedRows)return res.status(404).json({error:'Booking tidak ditemukan'});
+  if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID booking tidak valid'});
+  const result=await transaction(async connection=>{
+    const[bookings]=await connection.execute(
+      'SELECT id,service_id,status,stok_dipotong FROM bookings WHERE id=? FOR UPDATE',[req.params.id]
+    );
+    const booking=bookings[0];
+    if(!booking)throw Object.assign(new Error('Booking tidak ditemukan'),{status:404});
+    let deducted=false,refunded=false;
+    if(['dikonfirmasi','selesai'].includes(status)&&!Number(booking.stok_dipotong)){
+      await connection.execute('SELECT id FROM services WHERE id=? FOR UPDATE',[booking.service_id]);
+      const[materials]=await connection.execute(
+        'SELECT inventory_id,jumlah_pakai FROM service_materials WHERE service_id=? ORDER BY inventory_id',
+        [booking.service_id]
+      );
+      const locked=[];
+      for(const material of materials){
+        const[items]=await connection.execute(
+          'SELECT id,nama_barang,satuan,stok,jenis,deleted_at FROM inventory WHERE id=? FOR UPDATE',[material.inventory_id]
+        );
+        if(items.length&&items[0].jenis==='habis_pakai'&&!items[0].deleted_at)
+          locked.push({...items[0],usage:Number(material.jumlah_pakai)})
+      }
+      const format=value=>Number(value).toLocaleString('id-ID',{maximumFractionDigits:2});
+      const insufficient=locked.filter(item=>Math.round(Number(item.stok)*100)<Math.round(item.usage*100));
+      if(insufficient.length){
+        throw Object.assign(new Error(insufficient.map(item=>
+          `Stok '${item.nama_barang}' tidak cukup. Sisa ${format(item.stok)} ${item.satuan}, butuh ${format(item.usage)} ${item.satuan}.`
+        ).join(' ')),{status:409})
+      }
+      if(locked.length){
+        for(const item of locked){
+          const before=Math.round(Number(item.stok)*100)/100;
+          const after=(Math.round(Number(item.stok)*100)-Math.round(item.usage*100))/100;
+          await connection.execute('UPDATE inventory SET stok=? WHERE id=?',[after,item.id]);
+          await connection.execute(
+            "INSERT INTO inventory_logs(inventory_id,booking_id,tipe,jumlah,stok_sebelum,stok_sesudah,nama_barang,keterangan,created_by) VALUES(?,?,'keluar',?,?,?,?,?,?)",
+            [item.id,req.params.id,item.usage,before,after,item.nama_barang,'Pemakaian booking #'+req.params.id,req.user.id]
+          );
+          await connection.execute(
+            'INSERT INTO booking_inventory_usage(booking_id,inventory_id,nama_barang,jumlah_pakai) VALUES(?,?,?,?)',
+            [req.params.id,item.id,item.nama_barang,item.usage]
+          )
+        }
+        deducted=true
+      }
+    }else if(status==='batal'&&Number(booking.stok_dipotong)){
+      const[usages]=await connection.execute(
+        'SELECT inventory_id,nama_barang,jumlah_pakai FROM booking_inventory_usage WHERE booking_id=? ORDER BY inventory_id',
+        [req.params.id]
+      );
+      for(const usage of usages){
+        const[items]=await connection.execute('SELECT id,stok FROM inventory WHERE id=? FOR UPDATE',[usage.inventory_id]);
+        if(!items.length)throw new Error('Barang untuk pengembalian booking #'+req.params.id+' tidak ditemukan');
+        const before=Math.round(Number(items[0].stok)*100)/100;
+        const after=(Math.round(Number(items[0].stok)*100)+Math.round(Number(usage.jumlah_pakai)*100))/100;
+        if(after>99999999.99)throw new Error('Stok melewati batas penyimpanan saat pengembalian booking #'+req.params.id);
+        await connection.execute('UPDATE inventory SET stok=? WHERE id=?',[after,usage.inventory_id]);
+        await connection.execute(
+          "INSERT INTO inventory_logs(inventory_id,booking_id,tipe,jumlah,stok_sebelum,stok_sesudah,nama_barang,keterangan,created_by) VALUES(?,?,'masuk',?,?,?,?,?,?)",
+          [usage.inventory_id,req.params.id,usage.jumlah_pakai,before,after,usage.nama_barang,'Pembatalan booking #'+req.params.id,req.user.id]
+        )
+      }
+      await connection.execute('DELETE FROM booking_inventory_usage WHERE booking_id=?',[req.params.id]);
+      refunded=Number(booking.stok_dipotong)===1
+    }
+    const shouldBeCut=Number(booking.stok_dipotong)===1||deducted;
+    await connection.execute(
+      'UPDATE bookings SET status=?,stok_dipotong=? WHERE id=?',
+      [status,refunded?0:(shouldBeCut?1:0),req.params.id]
+    );
+    return{deducted,refunded}
+  });
   await audit(req.user.id,'BOOKING_STATUS','#'+req.params.id+' -> '+status,req.ip);
-  res.json({ok:true})
+  res.json({ok:true,...result})
 }));
 
 const admin=need('admin:*');
 const validInventoryId=value=>/^[1-9]\d*$/.test(String(value||''));
 const inventoryNumber=(value,label)=>{
   const number=Number(value);
-  if(value===undefined||value===null||String(value).trim()===''||!Number.isFinite(number)||number<0||number>9999999999.99||Number(number.toFixed(2))!==number)
+  if(value===undefined||value===null||String(value).trim()===''||!Number.isFinite(number)||number<0||number>99999999.99||Number(number.toFixed(2))!==number)
     throw Object.assign(new Error(label+' tidak valid (maksimal 2 angka desimal)'),{status:400});
   return number
 };
 const parseInventoryItem=form=>{
-  const code=String(form.code||'').trim().toUpperCase();
-  const name=String(form.name||'').trim();
-  const category=String(form.category||'').trim();
-  const unit=String(form.unit||'').trim();
-  if(!/^[A-Z0-9][A-Z0-9-]{1,19}$/.test(code)||!name||name.length>160||!category||category.length>80||!unit||unit.length>30)
-    throw Object.assign(new Error('Kode, nama, kategori, atau satuan barang tidak valid'),{status:400});
-  const minimum=inventoryNumber(form.low_stock_threshold,'Stok minimum');
-  const purchasePrice=Number(form.purchase_price);
-  if(!Number.isSafeInteger(purchasePrice)||purchasePrice<0)
-    throw Object.assign(new Error('Harga beli harus bilangan bulat nol atau lebih'),{status:400});
-  return{code,name,category,unit,minimum,purchasePrice}
+  const name=String(form.nama_barang||'').trim();
+  const category=String(form.kategori||'').trim();
+  const type=String(form.jenis||'').trim();
+  const unit=String(form.satuan||'').trim();
+  if(!name||name.length>160||!['Rambut','Kuku','Mata & Alis','Wajah & Badan','Makeup'].includes(category)||
+     !['habis_pakai','alat'].includes(type)||!unit||unit.length>30)
+    throw Object.assign(new Error('Nama, kategori, jenis, atau satuan barang tidak valid'),{status:400});
+  const minimum=inventoryNumber(form.stok_minimum,'Stok minimum');
+  return{name,category,type,unit,minimum}
 };
 app.get('/api/admin/inventory',auth,admin,asyncRoute(async(_req,res)=>{
-  const items=await rows(`SELECT id,code,name,category,unit,quantity,low_stock_threshold,purchase_price
-    FROM inventory_items WHERE active=1 ORDER BY category,name`);
-  res.json(items.map(item=>({...item,quantity:Number(item.quantity),low_stock_threshold:Number(item.low_stock_threshold),purchase_price:Number(item.purchase_price)})))
+  const items=await rows('SELECT id,nama_barang,kategori,jenis,satuan,stok,stok_minimum FROM inventory WHERE deleted_at IS NULL ORDER BY kategori,nama_barang');
+  res.json(items.map(item=>({...item,stok:Number(item.stok),stok_minimum:Number(item.stok_minimum)})))
 }));
 app.post('/api/admin/inventory',auth,admin,asyncRoute(async(req,res)=>{
   const item=parseInventoryItem(req.body||{});
-  const stock=inventoryNumber(req.body?.quantity??0,'Stok awal');
-  const itemId=await transaction(async connection=>{
-    const[created]=await connection.execute(
-      'INSERT INTO inventory_items(code,name,category,unit,quantity,low_stock_threshold,purchase_price) VALUES(?,?,?,?,?,?,?)',
-      [item.code,item.name,item.category,item.unit,stock,item.minimum,item.purchasePrice]
-    );
-    if(stock>0)await connection.execute(
-      "INSERT INTO inventory_movements(item_id,type,change_amount,stock_before,stock_after,note,user_id) VALUES(?,'koreksi',?,0,?,?,?)",
-      [created.insertId,stock,stock,'Stok awal barang',req.user.id]
-    );
-    return created.insertId
-  });
-  await audit(req.user.id,'BARANG_DITAMBAH',item.code+' '+item.name,req.ip);
-  res.status(201).json({id:itemId})
+  const[created]=await pool.execute(
+    'INSERT INTO inventory(nama_barang,kategori,jenis,satuan,stok,stok_minimum) VALUES(?,?,?,?,0,?)',
+    [item.name,item.category,item.type,item.unit,item.minimum]
+  );
+  await audit(req.user.id,'BARANG_DITAMBAH',item.name,req.ip);
+  res.status(201).json({id:created.insertId})
 }));
 app.put('/api/admin/inventory/:id',auth,admin,asyncRoute(async(req,res)=>{
   if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID barang tidak valid'});
   const item=parseInventoryItem(req.body||{});
-  const result=await execute(`UPDATE inventory_items SET code=?,name=?,category=?,unit=?,low_stock_threshold=?,purchase_price=?
-    WHERE id=? AND active=1`,[item.code,item.name,item.category,item.unit,item.minimum,item.purchasePrice,req.params.id]);
-  if(!result.affectedRows)return res.status(404).json({error:'Barang tidak ditemukan'});
-  await audit(req.user.id,'BARANG_DIUBAH','#'+req.params.id+' '+item.code,req.ip);
+  await transaction(async connection=>{
+    const[existing]=await connection.execute('SELECT id FROM inventory WHERE id=? AND deleted_at IS NULL FOR UPDATE',[req.params.id]);
+    if(!existing.length)throw Object.assign(new Error('Barang tidak ditemukan'),{status:404});
+    await connection.execute(
+      'UPDATE inventory SET nama_barang=?,kategori=?,jenis=?,satuan=?,stok_minimum=? WHERE id=?',
+      [item.name,item.category,item.type,item.unit,item.minimum,req.params.id]
+    )
+  });
+  await audit(req.user.id,'BARANG_DIUBAH','#'+req.params.id+' '+item.name,req.ip);
   res.json({ok:true})
 }));
 app.delete('/api/admin/inventory/:id',auth,admin,asyncRoute(async(req,res)=>{
   if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID barang tidak valid'});
-  const result=await execute('UPDATE inventory_items SET active=0 WHERE id=? AND active=1',[req.params.id]);
-  if(!result.affectedRows)return res.status(404).json({error:'Barang tidak ditemukan'});
-  await audit(req.user.id,'BARANG_DIHAPUS','#'+req.params.id,req.ip);
+  const item=await transaction(async connection=>{
+    const[items]=await connection.execute('SELECT id,nama_barang FROM inventory WHERE id=? AND deleted_at IS NULL FOR UPDATE',[req.params.id]);
+    if(!items.length)throw Object.assign(new Error('Barang tidak ditemukan'),{status:404});
+    const[references]=await connection.execute('SELECT id FROM service_materials WHERE inventory_id=? FOR UPDATE',[req.params.id]);
+    if(references.length)throw Object.assign(new Error('Barang tidak dapat dihapus karena masih digunakan pada satu atau beberapa layanan.'),{status:409});
+    await connection.execute('UPDATE inventory SET deleted_at=CURRENT_TIMESTAMP WHERE id=?',[req.params.id]);
+    return items[0]
+  });
+  await audit(req.user.id,'BARANG_DIHAPUS','#'+req.params.id+' '+item.nama_barang,req.ip);
   res.json({ok:true})
 }));
 app.patch('/api/admin/inventory/:id/stock',auth,admin,asyncRoute(async(req,res)=>{
@@ -497,31 +573,66 @@ app.patch('/api/admin/inventory/:id/stock',auth,admin,asyncRoute(async(req,res)=
   if(!['masuk','keluar','koreksi'].includes(type))return res.status(400).json({error:'Jenis mutasi tidak valid'});
   const note=String(req.body?.note||'').trim();
   if(note.length>160)return res.status(400).json({error:'Catatan maksimal 160 karakter'});
-  const amount=inventoryNumber(type==='koreksi'?req.body?.stock_actual:req.body?.quantity,type==='koreksi'?'Stok aktual':'Jumlah mutasi');
+  const amount=inventoryNumber(type==='koreksi'?req.body?.stok_aktual:req.body?.jumlah,type==='koreksi'?'Stok aktual':'Jumlah mutasi');
   const result=await transaction(async connection=>{
-    const[items]=await connection.execute('SELECT id,name,quantity FROM inventory_items WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
+    const[items]=await connection.execute('SELECT id,nama_barang,stok FROM inventory WHERE id=? AND deleted_at IS NULL FOR UPDATE',[req.params.id]);
     if(!items.length)throw Object.assign(new Error('Barang tidak ditemukan'),{status:404});
-    const beforeCents=Math.round(Number(items[0].quantity)*100),amountCents=Math.round(amount*100);
+    const beforeCents=Math.round(Number(items[0].stok)*100),amountCents=Math.round(amount*100);
     const afterCents=type==='masuk'?beforeCents+amountCents:type==='keluar'?beforeCents-amountCents:amountCents;
     if((type!=='koreksi'&&amountCents<=0)||afterCents<0)throw Object.assign(new Error(afterCents<0?'Stok tidak cukup untuk barang keluar':'Jumlah harus lebih besar dari nol'),{status:400});
-    if(afterCents>999999999999)throw Object.assign(new Error('Stok melewati batas penyimpanan'),{status:400});
+    if(afterCents>9999999999)throw Object.assign(new Error('Stok melewati batas penyimpanan'),{status:400});
     const before=beforeCents/100,after=afterCents/100,change=(afterCents-beforeCents)/100;
-    if(change===0)return{changed:false,stock:before};
-    await connection.execute('UPDATE inventory_items SET quantity=? WHERE id=?',[after,req.params.id]);
+    await connection.execute('UPDATE inventory SET stok=? WHERE id=?',[after,req.params.id]);
     await connection.execute(
-      'INSERT INTO inventory_movements(item_id,type,change_amount,stock_before,stock_after,note,user_id) VALUES(?,?,?,?,?,?,?)',
-      [req.params.id,type,change,before,after,note||'Perubahan stok',req.user.id]
+      'INSERT INTO inventory_logs(inventory_id,tipe,jumlah,stok_sebelum,stok_sesudah,nama_barang,keterangan,created_by) VALUES(?,?,?,?,?,?,?,?)',
+      [req.params.id,type,type==='koreksi'?change:amount,before,after,items[0].nama_barang,note||'Perubahan stok',req.user.id]
     );
-    return{changed:true,stock:after,name:items[0].name}
+    return{changed:change!==0,stock:after,name:items[0].nama_barang}
   });
-  if(result.changed)await audit(req.user.id,'STOK_DIUBAH',result.name+' '+type+' '+result.stock,req.ip);
+  await audit(req.user.id,'STOK_DIUBAH',result.name+' '+type+' '+result.stock,req.ip);
   res.json({ok:true,...result})
 }));
-app.get('/api/admin/inventory/movements',auth,admin,asyncRoute(async(_req,res)=>{
-  res.json(await rows(`SELECT m.id,m.type,m.change_amount,m.stock_before,m.stock_after,m.note,m.created_at,
-      i.code,i.name,u.name AS user
-    FROM inventory_movements m JOIN inventory_items i ON i.id=m.item_id
-    LEFT JOIN users u ON u.id=m.user_id ORDER BY m.id DESC LIMIT 100`))
+app.post('/api/admin/inventory/initial-stock',auth,admin,asyncRoute(async(req,res)=>{
+  const items=req.body?.items;
+  if(!Array.isArray(items)||items.length<1||items.length>200)
+    throw Object.assign(new Error('Pilih 1 sampai 200 barang untuk mengisi stok awal'),{status:400});
+  const checked=items.map(item=>{
+    if(!validInventoryId(item?.inventory_id))throw Object.assign(new Error('ID barang tidak valid'),{status:400});
+    return{inventoryId:String(item.inventory_id),quantity:inventoryNumber(item.stok,'Stok awal')}
+  });
+  if(new Set(checked.map(item=>item.inventoryId)).size!==checked.length)
+    throw Object.assign(new Error('Barang yang sama tidak boleh dikirim lebih dari satu kali'),{status:400});
+  await transaction(async connection=>{
+    checked.sort((a,b)=>BigInt(a.inventoryId)<BigInt(b.inventoryId)?-1:1);
+    const locked=[];
+    for(const entry of checked){
+      const[found]=await connection.execute(
+        'SELECT id,nama_barang,stok FROM inventory WHERE id=? AND deleted_at IS NULL FOR UPDATE',[entry.inventoryId]
+      );
+      if(!found.length)throw Object.assign(new Error('Salah satu barang tidak ditemukan'),{status:404});
+      locked.push({...entry,...found[0]})
+    }
+    for(const item of locked){
+      if(item.quantity===0)continue;
+      const before=Number(item.stok),afterCents=Math.round(before*100)+Math.round(item.quantity*100);
+      if(afterCents>9999999999)throw Object.assign(new Error('Stok '+item.nama_barang+' melewati batas penyimpanan'),{status:400});
+      const after=afterCents/100;
+      await connection.execute('UPDATE inventory SET stok=? WHERE id=?',[after,item.id]);
+      await connection.execute(
+        "INSERT INTO inventory_logs(inventory_id,tipe,jumlah,stok_sebelum,stok_sesudah,nama_barang,keterangan,created_by) VALUES(?,'masuk',?,?,?,?,?,?)",
+        [item.id,item.quantity,before,after,item.nama_barang,'Stok awal',req.user.id]
+      )
+    }
+  });
+  await audit(req.user.id,'STOK_AWAL_DIISI',checked.length+' barang',req.ip);
+  res.json({ok:true})
+}));
+app.get('/api/admin/inventory/logs',auth,admin,asyncRoute(async(req,res)=>{
+  const inventoryId=req.query.inventory_id;
+  if(inventoryId&&!validInventoryId(inventoryId))return res.status(400).json({error:'ID barang tidak valid'});
+  const filter=inventoryId?'WHERE l.inventory_id=?':'';
+  res.json(await rows(`SELECT l.id,l.inventory_id,l.booking_id,l.tipe,l.jumlah,l.stok_sebelum,l.stok_sesudah,l.nama_barang,l.keterangan,l.created_at,u.name AS pembuat
+    FROM inventory_logs l LEFT JOIN users u ON u.id=l.created_by ${filter} ORDER BY l.id DESC LIMIT 200`,inventoryId?[inventoryId]:[]))
 }));
 app.post('/api/admin/lock-sessions',auth,admin,asyncRoute(async(req,res)=>{
   const removed=await transaction(async connection=>{
@@ -532,7 +643,50 @@ app.post('/api/admin/lock-sessions',auth,admin,asyncRoute(async(req,res)=>{
   res.json({ok:true,revoked:removed})
 }));
 app.get('/api/admin/services',auth,admin,asyncRoute(async(_req,res)=>{
-  res.json(await rows('SELECT id,name,description,price,discount_price,minutes,image_path FROM services WHERE active=1 ORDER BY sort_order,id'))
+  const serviceRows=await rows('SELECT id,name,description,price,discount_price,minutes,image_path FROM services WHERE active=1 ORDER BY sort_order,id');
+  const materialRows=await rows(`SELECT sm.service_id,sm.inventory_id,sm.jumlah_pakai,i.nama_barang,i.satuan,i.jenis
+    FROM service_materials sm JOIN inventory i ON i.id=sm.inventory_id
+    WHERE i.deleted_at IS NULL ORDER BY sm.service_id,i.nama_barang`);
+  const materialsByService=new Map();
+  for(const material of materialRows){
+    if(!materialsByService.has(Number(material.service_id)))materialsByService.set(Number(material.service_id),[]);
+    materialsByService.get(Number(material.service_id)).push({
+      inventory_id:Number(material.inventory_id),nama_barang:material.nama_barang,satuan:material.satuan,
+      jenis:material.jenis,jumlah_pakai:Number(material.jumlah_pakai)
+    })
+  }
+  res.json(serviceRows.map(service=>({...service,materials:materialsByService.get(Number(service.id))||[]})))
+}));
+app.put('/api/admin/services/:id/materials',auth,admin,asyncRoute(async(req,res)=>{
+  if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID layanan tidak valid'});
+  const materials=req.body?.materials;
+  if(!Array.isArray(materials)||materials.length>200)
+    return res.status(400).json({error:'Daftar barang layanan tidak valid'});
+  const checked=materials.map(material=>{
+    if(!validInventoryId(material?.inventory_id))throw Object.assign(new Error('ID barang tidak valid'),{status:400});
+    return{inventoryId:String(material.inventory_id),quantity:inventoryNumber(material.jumlah_pakai,'Jumlah pakai')}
+  });
+  if(checked.some(material=>material.quantity<=0)||new Set(checked.map(material=>material.inventoryId)).size!==checked.length)
+    return res.status(400).json({error:'Barang harus unik dan jumlah pakai harus lebih besar dari nol'});
+  await transaction(async connection=>{
+    const[services]=await connection.execute('SELECT id FROM services WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
+    if(!services.length)throw Object.assign(new Error('Layanan tidak ditemukan'),{status:404});
+    for(const material of checked){
+      const[items]=await connection.execute(
+        'SELECT id FROM inventory WHERE id=? AND deleted_at IS NULL FOR UPDATE',[material.inventoryId]
+      );
+      if(!items.length)throw Object.assign(new Error('Salah satu barang tidak ditemukan'),{status:404})
+    }
+    await connection.execute('DELETE FROM service_materials WHERE service_id=?',[req.params.id]);
+    for(const material of checked){
+      await connection.execute(
+        'INSERT INTO service_materials(service_id,inventory_id,jumlah_pakai) VALUES(?,?,?)',
+        [req.params.id,material.inventoryId,material.quantity]
+      )
+    }
+  });
+  await audit(req.user.id,'BAHAN_LAYANAN_DIUBAH','#'+req.params.id,req.ip);
+  res.json({ok:true})
 }));
 app.post('/api/admin/services',auth,admin,upload.single('image'),asyncRoute(async(req,res)=>{
   const service=parseService(req.body||{});
@@ -626,7 +780,7 @@ app.post('/api/admin/backup',auth,admin,asyncRoute(async(req,res)=>{
   fs.mkdirSync(backupsDirectory,{recursive:true});
   const filename=`salon-${Date.now()}.sql`;
   const filepath=path.join(backupsDirectory,filename);
-  const tables=['users','pw_history','sessions','services','bookings','inventory_items','inventory_movements','audit_log'];
+  const tables=['users','pw_history','sessions','services','bookings','inventory','service_materials','booking_inventory_usage','inventory_logs','inventory_items','inventory_movements','audit_log'];
   const dump=[];
   const connection=await pool.getConnection();
   try{
@@ -652,64 +806,15 @@ app.get('/api/admin/backups',auth,admin,asyncRoute(async(_req,res)=>{
 
 app.use((error,_req,res,_next)=>{
   if(error instanceof multer.MulterError)return res.status(400).json({error:error.code==='LIMIT_FILE_SIZE'?'Ukuran foto maksimal 5 MB':'File foto tidak valid'});
-  if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'Data dengan kode atau nama tersebut sudah ada'});
+  if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'Data dengan nama atau kode yang sama sudah ada'});
   const status=Number(error.status)||500;
   if(status>=500)console.error(error);
   res.status(status).json({error:status>=500?'Terjadi kesalahan pada server':error.message})
 });
 
 const port=Number(process.env.PORT||3000);
-const inventorySeed=require('./lib/inventory-seed-data');
-const ensureInventoryTables=async()=>{
-  await execute(`CREATE TABLE IF NOT EXISTS inventory_items (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    code VARCHAR(20) NOT NULL,
-    name VARCHAR(160) NOT NULL,
-    category VARCHAR(80) NOT NULL,
-    unit VARCHAR(30) NOT NULL,
-    quantity DECIMAL(12,2) UNSIGNED NOT NULL DEFAULT 0,
-    low_stock_threshold DECIMAL(12,2) UNSIGNED NOT NULL DEFAULT 0,
-    purchase_price BIGINT UNSIGNED NOT NULL DEFAULT 0,
-    active TINYINT(1) NOT NULL DEFAULT 1,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_inventory_code (code),
-    UNIQUE KEY uq_inventory_name (name),
-    KEY idx_inventory_stock (active,quantity,low_stock_threshold)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
-  await execute(`CREATE TABLE IF NOT EXISTS inventory_movements (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    item_id BIGINT UNSIGNED NOT NULL,
-    type ENUM('masuk','keluar','koreksi') NOT NULL,
-    change_amount DECIMAL(12,2) NOT NULL,
-    stock_before DECIMAL(12,2) UNSIGNED NOT NULL,
-    stock_after DECIMAL(12,2) UNSIGNED NOT NULL,
-    note VARCHAR(160) NOT NULL DEFAULT '',
-    user_id BIGINT UNSIGNED NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    KEY idx_inventory_movements_item (item_id,id),
-    CONSTRAINT fk_inventory_movements_item FOREIGN KEY (item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_inventory_movements_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
-  const existing=await row('SELECT COUNT(*) AS count FROM inventory_items');
-  if(Number(existing.count))return;
-  for(const[code,name,category,unit,quantity,minimum,purchasePrice]of inventorySeed){
-    const result=await execute(
-      'INSERT IGNORE INTO inventory_items(code,name,category,unit,quantity,low_stock_threshold,purchase_price) VALUES(?,?,?,?,?,?,?)',
-      [code,name,category,unit,quantity,minimum,purchasePrice]
-    );
-    if(result.affectedRows)await execute(
-      "INSERT INTO inventory_movements(item_id,type,change_amount,stock_before,stock_after,note) VALUES(?,'koreksi',?,0,?,'Stok awal dari seeder')",
-      [result.insertId,quantity,quantity]
-    )
-  }
-};
 pool.query('SELECT 1').then(()=>{
   return ensureServiceDescriptions()
-}).then(()=>{
-  return ensureInventoryTables()
 }).then(()=>{
   return reconcileServiceImages()
 }).then(()=>{
