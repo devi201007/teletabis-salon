@@ -7,12 +7,28 @@
 <main id="app"><aside class="dashboard-watermark" id="dashboard-watermark" hidden><span>LOGIN SEBAGAI</span><b id="watermark-identity"></b><span>IP: <b id="watermark-ip"></b></span></aside>
 <p class="warn" id="password-warning" hidden>Password Anda sudah lebih dari 90 hari. Mohon segera diganti.</p>
 <form class="card" id="f-book" data-role="customer" hidden><h2>Booking Treatment</h2><select name="service_id" id="booking-service" required></select><input type="date" name="date" id="booking-date" required><input type="time" name="time" min="09:00" max="20:59" required><button>Pesan</button></form>
-<section class="card"><h2 id="booking-title">Booking Saya</h2><div id="bk"></div></section>
-<section class="card panic-card" data-role="admin" hidden><div><span class="eyebrow">DARURAT KEAMANAN</span><h2>Kunci semua sesi</h2><p>Logout semua perangkat yang sedang masuk, termasuk sesi ini. Semua pengguna perlu login ulang.</p></div><button class="panic-button" data-act="panic">Kunci Semua Sesi</button></section>
-<section class="card" data-role="admin" hidden><h2>Monitoring Keamanan</h2><div class="grid" id="st"></div></section>
-<section class="card" data-role="admin" hidden><h2>Data Pengguna (HP terenkripsi)</h2><div id="us"></div></section>
-<section class="card" data-role="admin" hidden><h2>Audit Trail</h2><button data-act="verify">Verifikasi Integritas Log</button><div id="au"></div></section>
-<section class="card" data-role="admin" hidden><div><h2>Kelola Layanan</h2><p>Tambah layanan, atur harga normal dan promo, atau unggah foto. Layanan dihapus dari katalog dengan konfirmasi password admin; riwayat booking tetap tersimpan.</p></div>
+<section class="card" id="booking-panel"><h2 id="booking-title">Booking Saya</h2><div id="bk"></div></section>
+<section id="admin-categories" data-role="admin" hidden>
+<div class="page-hero"><span class="eyebrow">PANEL ADMIN</span><h1>Kelola Salon</h1><p>Pilih kategori untuk mengelola stok, keamanan, dan layanan.</p></div>
+<div class="admin-category-grid">
+<a class="admin-category-card" href="/admin/inventory"><span class="eyebrow">KATEGORI 1</span><h2>Stok Barang</h2><p>Kelola stok produk dan kebutuhan salon.</p><span class="admin-category-link">Buka stok barang →</span></a>
+<a class="admin-category-card" href="#security"><span class="eyebrow">KATEGORI 2</span><h2>Keamanan</h2><p>Backup database, ganti password, audit trail, data pengguna, dan monitoring keamanan.</p><span class="admin-category-link">Buka keamanan →</span></a>
+<a class="admin-category-card" href="#services"><span class="eyebrow">KATEGORI 3</span><h2>Kelola Layanan</h2><p>Tambah, ubah, dan hapus layanan salon.</p><span class="admin-category-link">Buka layanan →</span></a>
+</div>
+</section>
+<section class="admin-category-content" id="admin-security" data-role="admin" hidden>
+<a class="text-link admin-back-link" href="/dashboard">← Kembali ke kategori</a>
+<div class="page-hero"><span class="eyebrow">KATEGORI 2</span><h1>Keamanan</h1></div>
+<section class="card panic-card"><div><span class="eyebrow">DARURAT KEAMANAN</span><h2>Kunci semua sesi</h2><p>Logout semua perangkat yang sedang masuk, termasuk sesi ini. Semua pengguna perlu login ulang.</p></div><button class="panic-button" data-act="panic">Kunci Semua Sesi</button></section>
+<section class="card"><h2>Monitoring Keamanan</h2><div class="grid" id="st"></div></section>
+<section class="card"><h2>Data Pengguna (HP terenkripsi)</h2><div id="us"></div></section>
+<section class="card"><h2>Audit Trail</h2><button data-act="verify">Verifikasi Integritas Log</button><div id="au"></div></section>
+<section class="card"><h2>Backup Database</h2><button data-act="backup">Buat Backup + Checksum SHA-256</button><ul id="bkp"></ul></section>
+</section>
+<section class="admin-category-content" id="admin-services-page" data-role="admin" hidden>
+<a class="text-link admin-back-link" href="/dashboard">← Kembali ke kategori</a>
+<div class="page-hero"><span class="eyebrow">KATEGORI 3</span><h1>Kelola Layanan</h1></div>
+<section class="card"><div><h2>Kelola Layanan</h2><p>Tambah layanan, atur harga normal dan promo, atau unggah foto. Layanan dihapus dari katalog dengan konfirmasi password admin; riwayat booking tetap tersimpan.</p></div>
 <form id="f-service" class="service-editor" enctype="multipart/form-data">
 <input type="hidden" name="id">
 <h3 id="service-form-title">Tambah layanan</h3>
@@ -29,7 +45,7 @@
 <div class="dialog-actions"><button id="service-submit">Tambah layanan</button><button class="secondary-button" type="button" data-act="cancel-service-edit" hidden>Batal edit</button></div>
 </form>
 <div id="admin-services"></div></section>
-<section class="card" data-role="admin" hidden><h2>Backup Database</h2><button data-act="backup">Buat Backup + Checksum SHA-256</button><ul id="bkp"></ul></section>
+</section>
 <form class="card" id="f-pw"><h2>Ganti Password</h2><input type="password" name="oldPassword" placeholder="Password lama" required><input type="password" name="newPassword" placeholder="Password baru" required><button>Simpan</button></form></main>
 <dialog class="confirm-dialog" id="delete-service-dialog"><form id="f-delete-service" method="dialog"><span class="eyebrow">KONFIRMASI ADMIN</span><h2>Hapus layanan?</h2><p id="delete-service-name"></p><input type="hidden" name="serviceId"><label class="field-label" for="delete-admin-password">Masukkan password admin</label><input id="delete-admin-password" type="password" name="password" autocomplete="current-password" required><div class="dialog-actions"><button type="button" class="secondary-button" data-act="close-delete">Batal</button><button class="danger-button">Hapus layanan</button></div></form></dialog>
-<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js?v=tab-sessions-2"></script></body></html>
+<div id="toast" role="status" aria-live="polite" hidden></div><footer class="site-footer"><span>© 2026 Teletabis Salon</span><span>Waktunya merawat diri.</span></footer><script src="/app.js?v=admin-categories-1"></script></body></html>

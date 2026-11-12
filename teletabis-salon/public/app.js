@@ -12,7 +12,7 @@ async function api(p,m='GET',b){
 }
 const toast=(m,ok=true)=>{const t=$('#toast');t.textContent=m;t.className=ok?'ok':'err';t.hidden=false;setTimeout(()=>t.hidden=true,3500)};
 const tbl=(h,r)=>`<div class="tw"><table><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${r.map(x=>`<tr>${x.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')||'<tr><td colspan="'+h.length+'">Belum ada data</td></tr>'}</table></div>`;
-let me=null,services=[],adminServices=[],currentIp='';
+let me=null,services=[],adminServices=[],inventoryItems=[],currentIp='';
 
 function setupPasswordVisibility(){
   document.querySelectorAll('input[type="password"]').forEach(input=>{
@@ -36,14 +36,16 @@ async function init(){
   setupPasswordVisibility();
   try{const session=await api('/me');me=session.user;currentIp=session.ip}catch(e){if(e.status===401)sessionStorage.removeItem('teletabisSessionToken');else throw e}
   const staff=me&&me.role!=='customer';
-  if(me&&(page==='login'||staff&&page!=='dashboard')){location.replace('/dashboard');return}
+  if(me&&(page==='login'||staff&&page!=='dashboard'&&!(page==='inventory'&&me.role==='admin'))){location.replace('/dashboard');return}
   if(page==='dashboard'&&!me){location.replace('/login');return}
+  if(page==='inventory'&&(!me||me.role!=='admin')){location.replace(me?'/dashboard':'/login');return}
   if(page==='home'||page==='services'||page==='dashboard'&&me.role==='customer')services=await api('/services');
   renderNav(page);
   if(page==='home')renderHomeServices();
   if(page==='services')renderServices();
   if(page==='login')refreshCaptcha($('#f-login')).catch(e=>toast(e.message,false));
   if(page==='dashboard')initDashboard();
+  if(page==='inventory')initInventory();
   setupServiceImages();
   if(me)window.setInterval(async()=>{
     if(document.visibilityState!=='visible')return;
@@ -54,7 +56,7 @@ async function init(){
 function renderNav(page){
   const staff=me&&me.role!=='customer';
   $('.brand').href=staff?'/dashboard':'/';
-  const links=staff?'':`<a href="/"${page==='home'?' aria-current="page"':''}>Beranda</a><a href="/layanan"${page==='services'?' aria-current="page"':''}>Layanan</a><a href="/tentang-kami"${page==='about'?' aria-current="page"':''}>Tentang kami</a>`;
+  const links=staff?me.role==='admin'&&page==='inventory'?'<a href="/dashboard">Kategori admin</a>':'':`<a href="/"${page==='home'?' aria-current="page"':''}>Beranda</a><a href="/layanan"${page==='services'?' aria-current="page"':''}>Layanan</a><a href="/tentang-kami"${page==='about'?' aria-current="page"':''}>Tentang kami</a>`;
   const account=me?`${!staff?'<a href="/dashboard">Dashboard</a>':''}<a href="/login" target="_blank" rel="noopener">Masuk di tab baru</a><span class="nav-user">${esc(me.name)} · <b>${esc(me.role)}</b></span><button class="nav-cta" data-act="out">Keluar</button>`:`<a class="nav-cta" href="/login"${page==='login'?' aria-current="page"':''}>Masuk</a>`;
   $('#nav').innerHTML=links+account;
 }
@@ -96,14 +98,17 @@ function initDashboard(){
   $('#watermark-identity').textContent=identity;
   $('#watermark-ip').textContent=currentIp||'Tidak tersedia';
   watermark.hidden=false;
-  $('#booking-title').textContent=me.role==='customer'?'Booking Saya':'Semua Booking';
+  $('#booking-title').textContent=me.role==='customer'?'Booking Saya':'Booking Kasir';
+  $('#booking-panel').hidden=me.role==='admin';
   $('#password-warning').hidden=!me.mustChange;
   if(me.role==='customer'){
     $('#booking-service').innerHTML=services.map(s=>`<option value="${s.id}">${esc(s.name)} — ${rp(s.discount_price??s.price)}</option>`).join('');
     $('#booking-date').min=localToday()
   }
-  load().catch(e=>toast(e.message,false));
-  if(me.role==='admin')adm().catch(e=>toast(e.message,false))
+  if(me.role==='admin'){
+    $('#f-pw').hidden=true;
+    initAdminCategories()
+  }else load().catch(e=>toast(e.message,false))
 }
 
 async function load(){
@@ -114,18 +119,56 @@ async function load(){
   ]))
 }
 
-async function adm(){
-  const[st,us,au,bk,serviceList]=await Promise.all([api('/admin/stats'),api('/admin/users'),api('/admin/audit'),api('/admin/backups'),api('/admin/services')]);
-  adminServices=serviceList;
+async function loadAdminSecurity(){
+  const[st,us,au,bk]=await Promise.all([api('/admin/stats'),api('/admin/users'),api('/admin/audit'),api('/admin/backups')]);
   $('#st').innerHTML=Object.entries(st).map(([k,v])=>`<div class="svc"><b>${v}</b><span>${esc(k)}</span></div>`).join('');
   $('#us').innerHTML=tbl(['Nama','Email','Role','HP (dekripsi)','Tersimpan di DB'],us.map(u=>[esc(u.name),esc(u.email),esc(u.role),esc(u.phone),`<code>${esc(u.phone_cipher)}</code>`]));
   $('#au').innerHTML=tbl(['Waktu','User','Aksi','Detail','IP'],au.map(x=>[esc(x.ts.slice(0,19).replace('T',' ')),esc(x.user_id??'-'),esc(x.action),esc(x.detail),esc(x.ip)]));
   $('#bkp').innerHTML=bk.map(f=>`<li>${esc(f.file)}<br><code>SHA-256: ${esc(f.sha256)}</code></li>`).join('')||'<li>Belum ada backup</li>';
+}
+async function loadAdminServices(){
+  const serviceList=await api('/admin/services');
+  adminServices=serviceList;
   $('#admin-services').innerHTML=tbl(['Foto','Layanan','Harga','Aksi'],serviceList.map(s=>[
     `<div class="service-admin-photo"><span class="service-no-image">${s.image_path?'Foto tidak ditemukan':'Belum ada foto'}</span>${s.image_path?`<img class="service-admin-thumb" src="${esc(s.image_path)}" alt="Foto ${esc(s.name)}" loading="lazy">`:''}</div>`,
     `${esc(s.name)}<br><small>${esc(s.description||'')}</small>`,servicePrice(s),`<div class="service-actions"><button class="secondary-button" type="button" data-act="service-image-picker" data-id="${s.id}">Ganti foto</button><input class="service-row-upload" type="file" accept="image/jpeg,image/png,image/webp" data-service-upload="${s.id}" aria-label="Pilih foto ${esc(s.name)}"><button class="secondary-button" type="button" data-act="edit-service" data-id="${s.id}">Edit</button><button class="danger-button" type="button" data-act="delete-service" data-id="${s.id}" data-name="${esc(s.name)}">Hapus</button></div>`
   ]));
   setupServiceImages()
+}
+function initAdminCategories(){
+  const show=()=>{
+    const category=location.hash.slice(1);
+    const security=category==='security',servicesPage=category==='services';
+    $('#admin-categories').hidden=security||servicesPage;
+    $('#admin-security').hidden=!security;
+    $('#admin-services-page').hidden=!servicesPage;
+    $('#f-pw').hidden=!security;
+    $('#password-warning').hidden=!me.mustChange||!security;
+    if(security)loadAdminSecurity().catch(e=>toast(e.message,false));
+    if(servicesPage)loadAdminServices().catch(e=>toast(e.message,false))
+  };
+  window.addEventListener('hashchange',show);
+  show()
+}
+const stockNumber=value=>Number(value).toLocaleString('id-ID',{maximumFractionDigits:2});
+async function loadInventory(){
+  const[items,movements]=await Promise.all([api('/admin/inventory'),api('/admin/inventory/movements')]);
+  inventoryItems=items;
+  $('#inventory-list').innerHTML=tbl(['Kode','Barang','Kategori','Stok','Minimum','Status','Aksi'],items.map(item=>[
+    esc(item.code),`${esc(item.name)}<br><small>${esc(item.unit)} · ${rp(item.purchase_price)}/satuan</small>`,esc(item.category),
+    `${stockNumber(item.quantity)} ${esc(item.unit)}`,`${stockNumber(item.low_stock_threshold)} ${esc(item.unit)}`,
+    item.quantity<=item.low_stock_threshold?'<span class="inventory-low">Stok rendah</span>':'<span class="inventory-good">Aman</span>',
+    `<div class="service-actions"><button class="secondary-button" type="button" data-act="edit-inventory" data-id="${item.id}">Edit</button><button class="danger-button" type="button" data-act="delete-inventory" data-id="${item.id}" data-name="${esc(item.name)}">Hapus</button></div>`
+  ]));
+  $('#stock-item').innerHTML=items.map(item=>`<option value="${item.id}">${esc(item.code)} · ${esc(item.name)} (${stockNumber(item.quantity)} ${esc(item.unit)})</option>`).join('');
+  $('#inventory-movements').innerHTML=tbl(['Waktu','Barang','Jenis','Perubahan','Stok sebelum → sesudah','Catatan','User'],movements.map(item=>[
+    esc(String(item.created_at).slice(0,19).replace('T',' ')),`${esc(item.code)} · ${esc(item.name)}`,esc(item.type),
+    `${Number(item.change_amount)>0?'+':''}${stockNumber(item.change_amount)}`,
+    `${stockNumber(item.stock_before)} → ${stockNumber(item.stock_after)}`,esc(item.note),esc(item.user||'—')
+  ]))
+}
+function initInventory(){
+  loadInventory().catch(e=>toast(e.message,false))
 }
 
 const fd=f=>Object.fromEntries(new FormData(f));
@@ -139,9 +182,19 @@ const resetServiceForm=()=>{
   $('#service-image-preview-img').removeAttribute('src');
   $('#service-image-preview-name').textContent=''
 };
+const resetInventoryForm=()=>{
+  const form=$('#f-inventory');
+  form.reset();
+  form.elements.id.value='';
+  $('#inventory-initial-stock').hidden=false;
+  form.elements.quantity.required=true;
+  $('#inventory-form-title').textContent='Tambah Barang';
+  $('#inventory-submit').textContent='Tambah Barang';
+  form.querySelector('[data-act="cancel-inventory-edit"]').hidden=true
+};
 document.addEventListener('submit',async e=>{
   const f=e.target,id=f.id,d=fd(f);
-  if(!['f-login','f-reg','f-book','f-pw','f-delete-service','f-service'].includes(id))return;
+  if(!['f-login','f-reg','f-book','f-pw','f-delete-service','f-service','f-inventory','f-stock'].includes(id))return;
   e.preventDefault();
   try{
     if(id==='f-login'){
@@ -153,14 +206,31 @@ document.addEventListener('submit',async e=>{
     else if(id==='f-reg'){await api('/register','POST',d);toast('Pendaftaran berhasil, silakan masuk');f.reset()}
     else if(id==='f-book'){d.service_id=+d.service_id;await api('/bookings','POST',d);toast('Booking berhasil dibuat');f.reset();load()}
     else if(id==='f-pw'){await api('/password','POST',d);toast('Password berhasil diganti');f.reset();me.mustChange=false;$('#password-warning').hidden=true}
-    else if(id==='f-delete-service'){await api('/admin/services/'+encodeURIComponent(d.serviceId),'DELETE',{password:d.password});$('#delete-service-dialog').close();f.reset();toast('Layanan dihapus dari katalog');await adm()}
+    else if(id==='f-delete-service'){await api('/admin/services/'+encodeURIComponent(d.serviceId),'DELETE',{password:d.password});$('#delete-service-dialog').close();f.reset();toast('Layanan dihapus dari katalog');await loadAdminServices()}
     else if(id==='f-service'){
       const serviceId=d.id,body=new FormData(f);
       body.delete('id');
       await api('/admin/services'+(serviceId?'/'+encodeURIComponent(serviceId):''),serviceId?'PUT':'POST',body);
       resetServiceForm();
       toast(serviceId?'Layanan berhasil diperbarui':'Layanan berhasil ditambahkan');
-      await adm()
+      await loadAdminServices()
+    }
+    else if(id==='f-inventory'){
+      const itemId=d.id;
+      delete d.id;
+      await api('/admin/inventory'+(itemId?'/'+encodeURIComponent(itemId):''),itemId?'PUT':'POST',d);
+      resetInventoryForm();
+      toast(itemId?'Barang berhasil diperbarui':'Barang berhasil ditambahkan');
+      await loadInventory()
+    }
+    else if(id==='f-stock'){
+      const itemId=d.item_id,type=d.type,body={type,note:d.note};
+      if(type==='koreksi')body.stock_actual=d.quantity;
+      else body.quantity=d.quantity;
+      await api('/admin/inventory/'+encodeURIComponent(itemId)+'/stock','PATCH',body);
+      f.reset();
+      toast('Mutasi stok berhasil disimpan');
+      await loadInventory()
     }
   }catch(x){
     if(id==='f-login')try{await refreshCaptcha(f)}catch(c){toast(c.message,false)}
@@ -185,7 +255,34 @@ document.addEventListener('click',async e=>{
     }
     if(a==='out'){await api('/logout','POST');sessionStorage.removeItem('teletabisSessionToken');location.assign('/');return}
     if(a==='verify'){const r=await api('/admin/verify');toast(r.ok?'Log audit utuh: tidak ada manipulasi ✔':'Log dimanipulasi! Entri #'+r.badId,r.ok)}
-    if(a==='backup'){await api('/admin/backup','POST');toast('Backup dibuat');adm()}
+    if(a==='backup'){await api('/admin/backup','POST');toast('Backup dibuat');await loadAdminSecurity()}
+    if(a==='edit-inventory'){
+      const item=inventoryItems.find(entry=>String(entry.id)===button.dataset.id);
+      if(!item)throw new Error('Barang tidak ditemukan; muat ulang halaman');
+      const form=$('#f-inventory');
+      form.reset();
+      form.elements.id.value=item.id;
+      form.elements.code.value=item.code;
+      form.elements.name.value=item.name;
+      form.elements.category.value=item.category;
+      form.elements.unit.value=item.unit;
+      form.elements.low_stock_threshold.value=item.low_stock_threshold;
+      form.elements.purchase_price.value=item.purchase_price;
+      form.elements.quantity.required=false;
+      $('#inventory-initial-stock').hidden=true;
+      $('#inventory-form-title').textContent='Edit Barang';
+      $('#inventory-submit').textContent='Simpan Perubahan';
+      form.querySelector('[data-act="cancel-inventory-edit"]').hidden=false;
+      form.scrollIntoView({behavior:'smooth',block:'center'});
+      form.elements.name.focus()
+    }
+    if(a==='cancel-inventory-edit')resetInventoryForm();
+    if(a==='delete-inventory'){
+      if(!window.confirm('Hapus '+button.dataset.name+' dari daftar barang? Riwayat stok tetap tersimpan.'))return;
+      await api('/admin/inventory/'+encodeURIComponent(button.dataset.id),'DELETE');
+      toast('Barang dihapus dari daftar');
+      await loadInventory()
+    }
     if(a==='delete-service'){
       const form=$('#f-delete-service');
       form.reset();
@@ -254,6 +351,11 @@ document.addEventListener('click',async e=>{
 });
 
 document.addEventListener('change',async e=>{
+  if(e.target.matches('#stock-type')){
+    $('#stock-quantity-label').textContent=e.target.value==='koreksi'?'Stok aktual':'Jumlah';
+    $('#f-stock').elements.quantity.min=e.target.value==='koreksi'?'0':'0.01';
+    return
+  }
   if(e.target.matches('[data-service-upload]')){
     const input=e.target,file=input.files[0],serviceId=input.dataset.serviceUpload;
     if(!file)return;
@@ -263,7 +365,7 @@ document.addEventListener('change',async e=>{
     try{
       await api('/admin/services/'+encodeURIComponent(serviceId)+'/image','PUT',form);
       toast('Foto layanan berhasil diunggah dan ditampilkan di website');
-      await adm()
+      await loadAdminServices()
     }catch(error){toast(error.message,false)}
     finally{input.value='';input.disabled=false}
     return

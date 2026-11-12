@@ -72,6 +72,40 @@ CREATE TABLE IF NOT EXISTS bookings (
   CONSTRAINT fk_bookings_service FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS inventory_items (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code VARCHAR(20) NOT NULL,
+  name VARCHAR(160) NOT NULL,
+  category VARCHAR(80) NOT NULL,
+  unit VARCHAR(30) NOT NULL,
+  quantity DECIMAL(12,2) UNSIGNED NOT NULL DEFAULT 0,
+  low_stock_threshold DECIMAL(12,2) UNSIGNED NOT NULL DEFAULT 0,
+  purchase_price BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_inventory_code (code),
+  UNIQUE KEY uq_inventory_name (name),
+  KEY idx_inventory_stock (active,quantity,low_stock_threshold)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS inventory_movements (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  item_id BIGINT UNSIGNED NOT NULL,
+  type ENUM('masuk','keluar','koreksi') NOT NULL,
+  change_amount DECIMAL(12,2) NOT NULL,
+  stock_before DECIMAL(12,2) UNSIGNED NOT NULL,
+  stock_after DECIMAL(12,2) UNSIGNED NOT NULL,
+  note VARCHAR(160) NOT NULL DEFAULT '',
+  user_id BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_inventory_movements_item (item_id,id),
+  CONSTRAINT fk_inventory_movements_item FOREIGN KEY (item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_inventory_movements_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   ts DATETIME(3) NOT NULL,

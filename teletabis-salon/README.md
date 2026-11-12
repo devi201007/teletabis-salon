@@ -31,6 +31,12 @@ Foto suasana salon di halaman Tentang Kami berada di `public/images/salon/` seba
 
 Konten halaman bisa diedit di `public/index.html`, `public/layanan.html`, `public/tentang-kami.html`, `public/login.html`, dan `public/dashboard.html`. `public/app.js` mengatur data dinamis dan interaksi form.
 
+## Kategori admin dan stok barang
+
+Dashboard admin menampilkan tiga kategori: **Stok Barang** membuka `/admin/inventory`, **Keamanan** memuat backup database, ganti password, audit trail, data pengguna, monitoring keamanan, dan kunci semua sesi, sedangkan **Kelola Layanan** berisi CRUD layanan. Daftar booking disembunyikan dari halaman admin; booking customer dan kasir tetap tersedia.
+
+Saat server mulai, tabel inventory dibuat jika belum ada dan stok awal B01–B49 dimasukkan hanya untuk barang yang belum ada. Admin dapat menambah atau mengedit barang, mencatat barang masuk/keluar, mengoreksi stok aktual, menghapus barang dari daftar, dan melihat badge stok rendah serta riwayat mutasi. Perubahan stok dicatat bersama user dan saldo sebelum/sesudah; backup database turut mencakup tabel inventory.
+
 ## Fitur keamanan
 
 - Peran customer/kasir/admin, token sesi per tab yang disimpan di `sessionStorage` (server hanya menyimpan hash token), CAPTCHA sekali pakai, dan penguncian akun setelah lima kegagalan login. Setiap tab dapat memakai akun/role berbeda tanpa logout dari tab lain. Pembatasan login admin/kasir pukul 09.00–21.00 WIB dapat diaktifkan melalui `LOGIN_HOURS_ENABLED=1`.

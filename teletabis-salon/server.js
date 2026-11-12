@@ -282,8 +282,8 @@ app.use(helmet({contentSecurityPolicy:{directives:{
 }}}));
 app.use(express.json({limit:'10kb'}));
 app.use(express.static(path.join(__dirname,'public')));
-app.get(['/','/login','/layanan','/tentang-kami','/dashboard'],(req,res)=>{
-  const page={'/':'index.html','/login':'login.html','/layanan':'layanan.html','/tentang-kami':'tentang-kami.html','/dashboard':'dashboard.html'}[req.path];
+app.get(['/','/login','/layanan','/tentang-kami','/dashboard','/admin/inventory'],(req,res)=>{
+  const page={'/':'index.html','/login':'login.html','/layanan':'layanan.html','/tentang-kami':'tentang-kami.html','/dashboard':'dashboard.html','/admin/inventory':'inventory.html'}[req.path];
   res.sendFile(path.join(__dirname,'public',page))
 });
 const limiter=rateLimit({windowMs:60000,limit:20,message:{error:'Terlalu banyak permintaan, coba lagi nanti'}});
@@ -433,6 +433,96 @@ app.patch('/api/bookings/:id',auth,need('booking:update'),asyncRoute(async(req,r
 }));
 
 const admin=need('admin:*');
+const validInventoryId=value=>/^[1-9]\d*$/.test(String(value||''));
+const inventoryNumber=(value,label)=>{
+  const number=Number(value);
+  if(value===undefined||value===null||String(value).trim()===''||!Number.isFinite(number)||number<0||number>9999999999.99||Number(number.toFixed(2))!==number)
+    throw Object.assign(new Error(label+' tidak valid (maksimal 2 angka desimal)'),{status:400});
+  return number
+};
+const parseInventoryItem=form=>{
+  const code=String(form.code||'').trim().toUpperCase();
+  const name=String(form.name||'').trim();
+  const category=String(form.category||'').trim();
+  const unit=String(form.unit||'').trim();
+  if(!/^[A-Z0-9][A-Z0-9-]{1,19}$/.test(code)||!name||name.length>160||!category||category.length>80||!unit||unit.length>30)
+    throw Object.assign(new Error('Kode, nama, kategori, atau satuan barang tidak valid'),{status:400});
+  const minimum=inventoryNumber(form.low_stock_threshold,'Stok minimum');
+  const purchasePrice=Number(form.purchase_price);
+  if(!Number.isSafeInteger(purchasePrice)||purchasePrice<0)
+    throw Object.assign(new Error('Harga beli harus bilangan bulat nol atau lebih'),{status:400});
+  return{code,name,category,unit,minimum,purchasePrice}
+};
+app.get('/api/admin/inventory',auth,admin,asyncRoute(async(_req,res)=>{
+  const items=await rows(`SELECT id,code,name,category,unit,quantity,low_stock_threshold,purchase_price
+    FROM inventory_items WHERE active=1 ORDER BY category,name`);
+  res.json(items.map(item=>({...item,quantity:Number(item.quantity),low_stock_threshold:Number(item.low_stock_threshold),purchase_price:Number(item.purchase_price)})))
+}));
+app.post('/api/admin/inventory',auth,admin,asyncRoute(async(req,res)=>{
+  const item=parseInventoryItem(req.body||{});
+  const stock=inventoryNumber(req.body?.quantity??0,'Stok awal');
+  const itemId=await transaction(async connection=>{
+    const[created]=await connection.execute(
+      'INSERT INTO inventory_items(code,name,category,unit,quantity,low_stock_threshold,purchase_price) VALUES(?,?,?,?,?,?,?)',
+      [item.code,item.name,item.category,item.unit,stock,item.minimum,item.purchasePrice]
+    );
+    if(stock>0)await connection.execute(
+      "INSERT INTO inventory_movements(item_id,type,change_amount,stock_before,stock_after,note,user_id) VALUES(?,'koreksi',?,0,?,?,?)",
+      [created.insertId,stock,stock,'Stok awal barang',req.user.id]
+    );
+    return created.insertId
+  });
+  await audit(req.user.id,'BARANG_DITAMBAH',item.code+' '+item.name,req.ip);
+  res.status(201).json({id:itemId})
+}));
+app.put('/api/admin/inventory/:id',auth,admin,asyncRoute(async(req,res)=>{
+  if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID barang tidak valid'});
+  const item=parseInventoryItem(req.body||{});
+  const result=await execute(`UPDATE inventory_items SET code=?,name=?,category=?,unit=?,low_stock_threshold=?,purchase_price=?
+    WHERE id=? AND active=1`,[item.code,item.name,item.category,item.unit,item.minimum,item.purchasePrice,req.params.id]);
+  if(!result.affectedRows)return res.status(404).json({error:'Barang tidak ditemukan'});
+  await audit(req.user.id,'BARANG_DIUBAH','#'+req.params.id+' '+item.code,req.ip);
+  res.json({ok:true})
+}));
+app.delete('/api/admin/inventory/:id',auth,admin,asyncRoute(async(req,res)=>{
+  if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID barang tidak valid'});
+  const result=await execute('UPDATE inventory_items SET active=0 WHERE id=? AND active=1',[req.params.id]);
+  if(!result.affectedRows)return res.status(404).json({error:'Barang tidak ditemukan'});
+  await audit(req.user.id,'BARANG_DIHAPUS','#'+req.params.id,req.ip);
+  res.json({ok:true})
+}));
+app.patch('/api/admin/inventory/:id/stock',auth,admin,asyncRoute(async(req,res)=>{
+  if(!validInventoryId(req.params.id))return res.status(400).json({error:'ID barang tidak valid'});
+  const type=req.body?.type;
+  if(!['masuk','keluar','koreksi'].includes(type))return res.status(400).json({error:'Jenis mutasi tidak valid'});
+  const note=String(req.body?.note||'').trim();
+  if(note.length>160)return res.status(400).json({error:'Catatan maksimal 160 karakter'});
+  const amount=inventoryNumber(type==='koreksi'?req.body?.stock_actual:req.body?.quantity,type==='koreksi'?'Stok aktual':'Jumlah mutasi');
+  const result=await transaction(async connection=>{
+    const[items]=await connection.execute('SELECT id,name,quantity FROM inventory_items WHERE id=? AND active=1 FOR UPDATE',[req.params.id]);
+    if(!items.length)throw Object.assign(new Error('Barang tidak ditemukan'),{status:404});
+    const beforeCents=Math.round(Number(items[0].quantity)*100),amountCents=Math.round(amount*100);
+    const afterCents=type==='masuk'?beforeCents+amountCents:type==='keluar'?beforeCents-amountCents:amountCents;
+    if((type!=='koreksi'&&amountCents<=0)||afterCents<0)throw Object.assign(new Error(afterCents<0?'Stok tidak cukup untuk barang keluar':'Jumlah harus lebih besar dari nol'),{status:400});
+    if(afterCents>999999999999)throw Object.assign(new Error('Stok melewati batas penyimpanan'),{status:400});
+    const before=beforeCents/100,after=afterCents/100,change=(afterCents-beforeCents)/100;
+    if(change===0)return{changed:false,stock:before};
+    await connection.execute('UPDATE inventory_items SET quantity=? WHERE id=?',[after,req.params.id]);
+    await connection.execute(
+      'INSERT INTO inventory_movements(item_id,type,change_amount,stock_before,stock_after,note,user_id) VALUES(?,?,?,?,?,?,?)',
+      [req.params.id,type,change,before,after,note||'Perubahan stok',req.user.id]
+    );
+    return{changed:true,stock:after,name:items[0].name}
+  });
+  if(result.changed)await audit(req.user.id,'STOK_DIUBAH',result.name+' '+type+' '+result.stock,req.ip);
+  res.json({ok:true,...result})
+}));
+app.get('/api/admin/inventory/movements',auth,admin,asyncRoute(async(_req,res)=>{
+  res.json(await rows(`SELECT m.id,m.type,m.change_amount,m.stock_before,m.stock_after,m.note,m.created_at,
+      i.code,i.name,u.name AS user
+    FROM inventory_movements m JOIN inventory_items i ON i.id=m.item_id
+    LEFT JOIN users u ON u.id=m.user_id ORDER BY m.id DESC LIMIT 100`))
+}));
 app.post('/api/admin/lock-sessions',auth,admin,asyncRoute(async(req,res)=>{
   const removed=await transaction(async connection=>{
     const[result]=await connection.execute('DELETE FROM sessions');
@@ -536,7 +626,7 @@ app.post('/api/admin/backup',auth,admin,asyncRoute(async(req,res)=>{
   fs.mkdirSync(backupsDirectory,{recursive:true});
   const filename=`salon-${Date.now()}.sql`;
   const filepath=path.join(backupsDirectory,filename);
-  const tables=['users','pw_history','sessions','services','bookings','audit_log'];
+  const tables=['users','pw_history','sessions','services','bookings','inventory_items','inventory_movements','audit_log'];
   const dump=[];
   const connection=await pool.getConnection();
   try{
@@ -562,15 +652,64 @@ app.get('/api/admin/backups',auth,admin,asyncRoute(async(_req,res)=>{
 
 app.use((error,_req,res,_next)=>{
   if(error instanceof multer.MulterError)return res.status(400).json({error:error.code==='LIMIT_FILE_SIZE'?'Ukuran foto maksimal 5 MB':'File foto tidak valid'});
-  if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'Layanan dengan nama tersebut sudah ada'});
+  if(error.code==='ER_DUP_ENTRY')return res.status(409).json({error:'Data dengan kode atau nama tersebut sudah ada'});
   const status=Number(error.status)||500;
   if(status>=500)console.error(error);
   res.status(status).json({error:status>=500?'Terjadi kesalahan pada server':error.message})
 });
 
 const port=Number(process.env.PORT||3000);
+const inventorySeed=require('./lib/inventory-seed-data');
+const ensureInventoryTables=async()=>{
+  await execute(`CREATE TABLE IF NOT EXISTS inventory_items (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    code VARCHAR(20) NOT NULL,
+    name VARCHAR(160) NOT NULL,
+    category VARCHAR(80) NOT NULL,
+    unit VARCHAR(30) NOT NULL,
+    quantity DECIMAL(12,2) UNSIGNED NOT NULL DEFAULT 0,
+    low_stock_threshold DECIMAL(12,2) UNSIGNED NOT NULL DEFAULT 0,
+    purchase_price BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_inventory_code (code),
+    UNIQUE KEY uq_inventory_name (name),
+    KEY idx_inventory_stock (active,quantity,low_stock_threshold)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await execute(`CREATE TABLE IF NOT EXISTS inventory_movements (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    item_id BIGINT UNSIGNED NOT NULL,
+    type ENUM('masuk','keluar','koreksi') NOT NULL,
+    change_amount DECIMAL(12,2) NOT NULL,
+    stock_before DECIMAL(12,2) UNSIGNED NOT NULL,
+    stock_after DECIMAL(12,2) UNSIGNED NOT NULL,
+    note VARCHAR(160) NOT NULL DEFAULT '',
+    user_id BIGINT UNSIGNED NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_inventory_movements_item (item_id,id),
+    CONSTRAINT fk_inventory_movements_item FOREIGN KEY (item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_inventory_movements_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  const existing=await row('SELECT COUNT(*) AS count FROM inventory_items');
+  if(Number(existing.count))return;
+  for(const[code,name,category,unit,quantity,minimum,purchasePrice]of inventorySeed){
+    const result=await execute(
+      'INSERT IGNORE INTO inventory_items(code,name,category,unit,quantity,low_stock_threshold,purchase_price) VALUES(?,?,?,?,?,?,?)',
+      [code,name,category,unit,quantity,minimum,purchasePrice]
+    );
+    if(result.affectedRows)await execute(
+      "INSERT INTO inventory_movements(item_id,type,change_amount,stock_before,stock_after,note) VALUES(?,'koreksi',?,0,?,'Stok awal dari seeder')",
+      [result.insertId,quantity,quantity]
+    )
+  }
+};
 pool.query('SELECT 1').then(()=>{
   return ensureServiceDescriptions()
+}).then(()=>{
+  return ensureInventoryTables()
 }).then(()=>{
   return reconcileServiceImages()
 }).then(()=>{
